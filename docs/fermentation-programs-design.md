@@ -119,11 +119,13 @@ all params are DEFAULTS the builder can override per batch.
 - **COLD CRASH (all presets):** gradual **−6°F/12h**, target **34°F**.
 - Attenuation trigger via `sensor.apparent_attenuation`; terminal via a "flat for N h at/below
   expected FG" check (stricter than the near-terminal alert).
-- SAFETY: setpoint clamp is **PER-PROGRAM** (a single global 32–80°F would cap kveik, which
-  needs 85–95°F). Each preset carries its own {minF, maxF}: ale/lager `{32, 75}`, kveik
-  `{32, 98}`, cold-crash-only `{32, 45}`, custom = user-set (hard ceiling 100°F). Max single
-  ramp step ±5°F. Pause phase-advance on stale/lost gravity. The clamp is enforced on EVERY
-  write regardless of preset, using that program's bounds.
+- SAFETY: setpoint clamp is **PER-PROGRAM**, set as a TIGHT net just above each program's max
+  target (not a loose global). Researched (2026-07-08): lager D-rest consensus tops at 65–68°F,
+  72°F is too high — so **lager clamp = {32, 70}** (targets top at 69). ale `{32, 72}` (D-rest 69),
+  kveik `{32, 98}` (holds 90; needs the high ceiling a global would cap), cold-crash-only
+  `{32, 45}`, custom = user-set (hard ceiling 100°F). Max single ramp step ±5°F. Pause
+  phase-advance on stale/lost gravity. Clamp enforced on EVERY write using that program's bounds.
+  Sources: homebrewandbeer.com, BYO diacetyl-rest, Wyeast pro-lager.
 
 ## Build order (once approved)
 1. HA: per-tank program helpers + a program-tick automation + the 3 named program definitions

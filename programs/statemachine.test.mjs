@@ -4,7 +4,8 @@ let pass=0, fail=0;
 const ok=(n,c)=>{ if(c)pass++; else {fail++;console.log('  ✗ FAIL:',n);} };
 
 ok('kveik allows 90F', _internals.clampTemp(90, PRESETS.kveik.clamp)===90);
-ok('ale caps 90F→75', _internals.clampTemp(90, PRESETS.ale.clamp)===75);
+ok('ale caps 90F→72', _internals.clampTemp(90, PRESETS.ale.clamp)===72);
+ok('lager NEVER exceeds 70F', _internals.clampTemp(75, PRESETS.lager_modern.clamp)===70 && _internals.clampTemp(75, PRESETS.lager_fast.clamp)===70);
 ok('clamp floor 32', _internals.clampTemp(20, PRESETS.ale.clamp)===32);
 ok('custom hard ceiling 100', _internals.clampTemp(120, {minF:32,maxF:150})===100);
 ok('rate limit +12→+5', _internals.rateLimit(78,66)===71);

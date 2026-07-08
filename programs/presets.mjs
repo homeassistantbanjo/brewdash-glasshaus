@@ -16,7 +16,7 @@
 export const PRESETS = {
   ale: {
     label: 'Ale — free-rise + D-rest',
-    clamp: { minF: 32, maxF: 75 },
+    clamp: { minF: 32, maxF: 72 },   // D-rest tops at 69; 72 = tight safety headroom
     phases: [
       { name: 'pitch',   kind: 'hold', tempF: 64, advance: { type: 'active' } },
       { name: 'primary', kind: 'hold', tempF: 66, advance: { type: 'progressToFg', pct: 75 } },
@@ -27,7 +27,7 @@ export const PRESETS = {
   },
   lager_fast: {
     label: 'Lager — Brülosophy fast',
-    clamp: { minF: 32, maxF: 75 },
+    clamp: { minF: 32, maxF: 70 },   // lager must NEVER exceed 70°F (Jordan); D-rest tops at 66
     phases: [
       { name: 'primary', kind: 'hold', tempF: 52, advance: { type: 'attenuation', pct: 50 } },
       { name: 'drest',   kind: 'ramp', stepF: 5, everyHours: 12, targetF: 66, advance: { type: 'terminal' } },
@@ -36,7 +36,7 @@ export const PRESETS = {
   },
   lager_modern: {
     label: 'Lager — modern (ale-temp)',   // JORDAN'S method
-    clamp: { minF: 32, maxF: 75 },
+    clamp: { minF: 32, maxF: 70 },   // lager must NEVER exceed 70°F (Jordan); ramp tops at 69
     phases: [
       { name: 'primary', kind: 'hold', tempF: 64, advance: { type: 'attenuation', pct: 50 } },
       { name: 'ramp',    kind: 'ramp', stepF: 5, everyHours: 12, targetF: 69, advance: { type: 'terminal' } },
