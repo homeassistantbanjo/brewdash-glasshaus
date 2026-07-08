@@ -61,7 +61,7 @@ over reusing the dashboard's).
    - Repository: `ghcr.io/homeassistantbanjo/brewdash-glasshaus-programs:latest`
    - Env: `HA_URL=http://192.168.50.127:8123`, `HA_TOKEN=<scoped token>`
    - **Leave `DRY_RUN=true`** (baked into the image — do NOT set false yet).
-   - (optional: `TICK_MINUTES=20`, `TANKS=tank_1,tank_2,tank_3`)
+   - (optional: `TICK_MINUTES=5` default, `TANKS=tank_1,tank_2,tank_3`)
 2. In the app, pick a program on Tank 1 (⚙ Manage → Fermentation Program).
 3. **Watch `docker logs -f Glasshaus-programs`** — it logs what it WOULD command
    (e.g. "would set tank_1 to 64°F, holding for 50% attenuation"), writing NOTHING.

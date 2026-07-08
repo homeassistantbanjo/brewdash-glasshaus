@@ -2,7 +2,7 @@
 // Ticks every TICK_MINUTES: for each tank running a program, read program-state
 // helpers + live sensors from HA, run tick(), and (if changed) write the setpoint
 // + advance the phase. Config via env (NEVER git): HA_URL, HA_TOKEN,
-// [TICK_MINUTES=20], [DRY_RUN=true to log-only, never write setpoints].
+// [TICK_MINUTES=5], [DRY_RUN=true to log-only, never write setpoints].
 //
 // HA state entities per tank (created by ha/glasshaus_programs.yaml):
 //   input_select.tank_N_program        which preset (or 'None'/'Custom')
@@ -15,7 +15,10 @@ import { tick, resolveStartPhase } from './statemachine.mjs';
 
 const HA_URL = req('HA_URL');
 const HA_TOKEN = req('HA_TOKEN');
-const TICK_MINUTES = Number(process.env.TICK_MINUTES || 20);
+// 5-min default: fermentation logic is slow (hours/days) so tighter buys nothing
+// for the beer, but it keeps interactive moments (crash-confirm, program start)
+// responsive — those act within one tick. Override via TICK_MINUTES env.
+const TICK_MINUTES = Number(process.env.TICK_MINUTES || 5);
 const DRY_RUN = /^(1|true|yes)$/i.test(process.env.DRY_RUN || '');
 const TANKS = (process.env.TANKS || 'tank_1,tank_2,tank_3').split(',').map((t) => t.trim());
 
