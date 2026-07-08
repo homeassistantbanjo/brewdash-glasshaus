@@ -2,9 +2,7 @@ import { HassConnect } from '@hakit/core';
 import { Overview } from './components/Overview';
 import { ToastProvider } from './components/Toasts';
 import { theme, hexA } from './theme/tokens';
-
-const HA_URL = import.meta.env.VITE_HA_URL ?? 'http://192.168.50.127:8123';
-const HA_TOKEN = import.meta.env.VITE_HA_TOKEN ?? '';
+import { HA_URL, HA_TOKEN } from './config';
 
 export default function App() {
   return (

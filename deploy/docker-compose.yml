@@ -1,35 +1,14 @@
-# GlassHaus kiosk host — Unraid deployment (Compose Manager plugin, or `docker compose up -d`).
-# Serves the dashboard for the wall tablet. Talks to nothing but git (pull) — the
-# browser talks to Home Assistant directly, so this only serves static files.
-#
-# SECRETS: put real values in a .env file NEXT TO this compose file on Unraid
-# (NOT committed to git). Example .env:
-#   GIT_REPO=https://github.com/homeassistantbanjo/brewdash-glasshaus.git
-#   GIT_TOKEN=github_pat_xxx          # fine-grained PAT, read-only, this repo
-#   VITE_HA_URL=http://192.168.50.127:8123
-#   VITE_HA_TOKEN=eyJ...              # long-lived HA token
+# GlassHaus — optional compose (if you use the Compose Manager plugin). On stock
+# Unraid you'll more likely use the Docker tab "Add Container" — see deploy/README.md.
+# Pulls the PREBUILT image from ghcr (built by GitHub Actions); token injected at runtime.
 services:
   glasshaus:
     container_name: glasshaus
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    # If you prefer not to build on Unraid, push the image to a registry and use:
-    #   image: your-registry/glasshaus-host:latest
+    image: ghcr.io/homeassistantbanjo/brewdash-glasshaus:latest
     restart: unless-stopped
     ports:
-      - "8099:8080"           # reach the dashboard at http://<unraid-tailscale>:8099
+      - "8099:80"                       # http://<unraid-tailscale>:8099/
     environment:
-      GIT_REPO: "${GIT_REPO}"
-      GIT_BRANCH: "${GIT_BRANCH:-main}"
-      GIT_TOKEN: "${GIT_TOKEN:-}"
+      # injected into config.js at startup — token lives ONLY here, never in git/image
       VITE_HA_URL: "${VITE_HA_URL}"
       VITE_HA_TOKEN: "${VITE_HA_TOKEN}"
-      POLL_SECONDS: "${POLL_SECONDS:-300}"
-      SERVE_PORT: "8080"
-    # persist the cloned repo + node_modules across restarts (faster rebuilds)
-    volumes:
-      - glasshaus-app:/app/glasshaus
-
-volumes:
-  glasshaus-app:

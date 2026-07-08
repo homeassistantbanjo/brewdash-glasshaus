@@ -1,21 +1,26 @@
-# GlassHaus kiosk host — self-contained build+serve container for Unraid.
-# Clones the private repo, builds with the HA token (env var), serves dist/,
-# and re-pulls+rebuilds on a poll interval. See deploy/entrypoint.sh.
+# GlassHaus — prebuilt image for Unraid. Built by GitHub Actions (see
+# .github/workflows/build-image.yml) and published to ghcr.io; Unraid just PULLS it.
 #
-# Build:  docker build -t glasshaus-host -f deploy/Dockerfile .
-# (or point Unraid at this image / a registry copy)
-FROM node:22-alpine
+# The image is TOKEN-FREE and safe to store in the registry: the HA URL/token are
+# injected at CONTAINER STARTUP from env vars into /usr/share/nginx/html/config.js
+# (see docker-entrypoint.sh). One image serves any brewery.
 
-# git for pulling the repo; the rest ships with the node image
-RUN apk add --no-cache git
-
+# ---- build stage: compile the SPA (no secrets) --------------------------------
+FROM node:22-alpine AS build
 WORKDIR /app
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY package*.json ./
+RUN npm ci --no-audit --no-fund
+COPY . .
+# Build with NO VITE_HA_* env → token is NOT inlined. Runtime config.js supplies it.
+RUN npm run build
 
-# static server port (override with SERVE_PORT)
-EXPOSE 8080
-
-# All real config comes from env vars at runtime (Unraid template):
-#   GIT_REPO, GIT_BRANCH, GIT_TOKEN, VITE_HA_URL, VITE_HA_TOKEN, POLL_SECONDS, SERVE_PORT
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# ---- serve stage: nginx serving the static dist ------------------------------
+FROM nginx:alpine
+# SPA routing: all paths → index.html
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY deploy/docker-entrypoint.sh /docker-entrypoint.d/40-glasshaus-config.sh
+RUN chmod +x /docker-entrypoint.d/40-glasshaus-config.sh
+EXPOSE 80
+# nginx:alpine's own entrypoint runs /docker-entrypoint.d/*.sh then starts nginx,
+# so our config-writer runs first automatically.

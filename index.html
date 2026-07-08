@@ -11,6 +11,10 @@
       body { -webkit-font-smoothing: antialiased; }
     </style>
     <title>GlassHaus</title>
+    <!-- Runtime config: in the prebuilt container the entrypoint writes this file
+         from env vars (sets window.__GLASSHAUS_CONFIG__). In local dev it's an
+         empty stub and the app falls back to .env.local. Loaded before the app. -->
+    <script src="/config.js"></script>
   </head>
   <body>
     <div id="root"></div>
