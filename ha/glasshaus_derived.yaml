@@ -1,0 +1,334 @@
+# =============================================================================
+# GlassHaus derived sensors  —  Home Assistant PACKAGE
+# =============================================================================
+# Install: put this file at  <config>/packages/glasshaus_derived.yaml  and ensure
+#   your configuration.yaml has:
+#       homeassistant:
+#         packages: !include_dir_named packages
+#   then Developer Tools → YAML → "Reload template entities" (and reload the
+#   utility_meter / history_stats via a full restart the first time).
+#
+# SCOPE NOTE: these are scoped to the ONE Tilt (Black) + Tank 1 that exist today.
+#   They deliberately do NOT recompute things the GlassHaus app already derives
+#   per-batch in TypeScript (ABV, attenuation, velocity, ETA) — those scale to N
+#   batches in-app and should NOT be duplicated here. What's below is the stuff
+#   that genuinely belongs in HA: STATEFUL / TIME-INTEGRATED values and ALERT
+#   triggers that automations & notifications fire on.
+#   When you add more Tilts/tanks, duplicate the relevant blocks with the new
+#   entity ids (search-replace tilt_black_ / tank_1_ / _tank_1).
+#
+# TUNE THESE THRESHOLDS to your process:
+#   stall:      gravity change < 0.001 SG over 24h  → considered "not moving"
+#   excursion:  probe more than 2.0 °F off setpoint  → temperature excursion
+#   near_FG:    within 0.003 SG of expected FG        → approaching terminal
+#   signal age: Tilt gravity not updated in 15 min    → signal lost
+# =============================================================================
+
+# =============================================================================
+# FERMENTATION-START DETECTION  (sustained cumulative drop, settling-tolerant)
+# =============================================================================
+# The trick: after pitching, the Tilt settles/degasses and wort equilibrates to
+# pitch temp for a few hours — apparent gravity wobbles DOWN before any real
+# fermentation. A naive "gravity dropped" check false-fires on that. So we
+# compare current gravity to the MAX gravity over a rolling 8h window: during
+# settling that max stays ≈ OG, and only real, sustained attenuation pulls
+# current meaningfully below it. Then require the drop to hold (for: 2h) and
+# latch it one-shot per batch (input_boolean, reset when OG changes).
+
+# A package may have only ONE top-level `sensor:` key, so ALL platform-style
+# sensors (statistics + history_stats) live together here. Template sensors are
+# separate — they go under the `template:` key below.
+sensor:
+  # Rolling 8h max of Tilt gravity — the settling-proof reference point.
+  - platform: statistics
+    name: "Tilt Black Gravity 8h Max"
+    unique_id: gh_tilt_black_gravity_8h_max
+    entity_id: sensor.tilt_black_gravity
+    state_characteristic: value_max
+    max_age:
+      hours: 8
+    sampling_size: 200
+
+  # --- TIME-INTEGRATED (history_stats) — see the section note further below ---
+  # Total time Tank 1 has been actively cooling (chiller on) over 7 days.
+  - platform: history_stats
+    name: "Tank 1 Cooling Runtime (7d)"
+    entity_id: binary_sensor.glycol_chiller_running_power  # WATTAGE truth, not the lying switch
+    state: "on"
+    type: time
+    end: "{{ now() }}"
+    duration:
+      days: 7
+
+  # How long the compressor has run in the last hour (pair with the count below
+  # for a short-cycling signal).
+  - platform: history_stats
+    name: "Glycol Compressor On (1h)"
+    entity_id: binary_sensor.glycol_chiller_running_power
+    state: "on"
+    type: time
+    end: "{{ now() }}"
+    duration:
+      hours: 1
+
+  # Number of compressor starts in the last hour — high count = short-cycling.
+  - platform: history_stats
+    name: "Glycol Compressor Cycles (1h)"
+    entity_id: binary_sensor.glycol_chiller_running_power
+    state: "on"
+    type: count
+    end: "{{ now() }}"
+    duration:
+      hours: 1
+
+# One-shot latch: fermentation confirmed for the CURRENT batch.
+input_boolean:
+  tank_1_fermentation_confirmed:
+    name: Tank 1 Fermentation Confirmed
+    icon: mdi:beer
+
+template:
+  - sensor:
+      # Cumulative gravity drop from the recent 8h max, in SG points (×1000).
+      # Settling wobble keeps the 8h-max near OG, so this stays small until real
+      # attenuation begins; then it climbs steadily. This is the core signal.
+      - name: "Tank 1 Gravity Drop From Peak"
+        unique_id: gh_tank1_gravity_drop_from_peak
+        unit_of_measurement: "pts"
+        state_class: measurement
+        availability: >
+          {{ has_value('sensor.tilt_black_gravity')
+             and has_value('sensor.tilt_black_gravity_8h_max') }}
+        state: >
+          {{ ((states('sensor.tilt_black_gravity_8h_max') | float
+               - states('sensor.tilt_black_gravity') | float) * 1000) | round(1) }}
+
+  - binary_sensor:
+      # ACTIVELY FERMENTING (raw): gravity has dropped ≥4 pts below its recent
+      # 8h peak. `for: 2h` on the automation/consumer makes it "sustained".
+      # This is the live signal; the one-shot latch is input_boolean above.
+      - name: "Tank 1 Actively Fermenting"
+        unique_id: gh_tank1_actively_fermenting
+        device_class: running
+        availability: "{{ has_value('sensor.tank_1_gravity_drop_from_peak') }}"
+        state: "{{ states('sensor.tank_1_gravity_drop_from_peak') | float(0) >= 4.0 }}"
+
+      # FERMENTATION STARTED (latched): mirrors the input_boolean so it shows up
+      # as a sensor for the app/dashboard. True once confirmed, until batch reset.
+      - name: "Tank 1 Fermentation Started"
+        unique_id: gh_tank1_fermentation_started
+        device_class: running
+        state: "{{ is_state('input_boolean.tank_1_fermentation_confirmed', 'on') }}"
+
+  # ---------------------------------------------------------------------------
+  # CROSS-SOURCE SANITY
+  # ---------------------------------------------------------------------------
+  - sensor:
+      # Tilt beer-temp vs tank probe-temp. This is the plausibility check
+      # (verifyAssignment) as a persistent sensor: a large gap means the wrong
+      # Tilt is probably assigned to this tank. °F.
+      - name: "Tank 1 Tilt-Probe Temp Delta"
+        unique_id: gh_tank1_tilt_probe_delta
+        unit_of_measurement: "°F"
+        state_class: measurement
+        availability: >
+          {{ has_value('sensor.tilt_black_temperature') and has_value('sensor.tank_1_probe_temp') }}
+        state: >
+          {{ (states('sensor.tilt_black_temperature') | float
+              - states('sensor.tank_1_probe_temp') | float) | round(2) }}
+
+      # Tilt live gravity vs the gravity Brewfather last logged. Big disagreement
+      # = one source is stale or a bad reading. SG points (×1000).
+      - name: "Tilt vs Brewfather Gravity Gap"
+        unique_id: gh_tilt_bf_gravity_gap
+        unit_of_measurement: "pts"
+        state_class: measurement
+        availability: >
+          {{ has_value('sensor.tilt_black_gravity') and has_value('sensor.brewfather_last_reading') }}
+        state: >
+          {{ ((states('sensor.tilt_black_gravity') | float
+               - states('sensor.brewfather_last_reading') | float) * 1000) | round(1) }}
+
+      # Minutes since the Tilt last pushed a gravity reading — feeds the
+      # "signal lost" binary_sensor and is a nice raw diagnostic.
+      - name: "Tilt Black Gravity Age"
+        unique_id: gh_tilt_black_gravity_age
+        unit_of_measurement: "min"
+        state_class: measurement
+        state: >
+          {{ ((now() - states.sensor.tilt_black_gravity.last_updated).total_seconds() / 60) | round(0) }}
+
+  # ---------------------------------------------------------------------------
+  # PROJECTIONS & PACE
+  # ---------------------------------------------------------------------------
+  - sensor:
+      # Days ahead(+)/behind(-) the Brewfather fermentation schedule, by gravity.
+      # Uses attenuation_progress (already exists) vs elapsed fraction of the
+      # scheduled ferment window. Positive = attenuating faster than planned.
+      - name: "Fermentation Pace vs Schedule"
+        unique_id: gh_ferment_pace
+        unit_of_measurement: "d"
+        state_class: measurement
+        availability: >
+          {{ has_value('sensor.attenuation_progress')
+             and has_value('sensor.brewfather_fermentation_start') }}
+        state: >
+          {% set start = as_timestamp(states('sensor.brewfather_fermentation_start')) %}
+          {% set planned_days = 7 %}   {# TODO: pull from Brewfather profile if exposed #}
+          {% set elapsed = (as_timestamp(now()) - start) / 86400 %}
+          {% set prog = states('sensor.attenuation_progress') | float / 100 %}
+          {% set expected_prog = [elapsed / planned_days, 1] | min %}
+          {{ ((prog - expected_prog) * planned_days) | round(1) }}
+
+      # Projected date the batch reaches expected FG, from current 24h velocity.
+      # Returns 'reached' if already at/below FG, 'stalled' if not moving.
+      - name: "Projected FG Reach"
+        unique_id: gh_projected_fg_reach
+        availability: >
+          {{ has_value('sensor.tilt_black_gravity')
+             and has_value('input_number.tank_1_expected_fg')
+             and has_value('sensor.gravity_24h_delta') }}
+        state: >
+          {% set sg = states('sensor.tilt_black_gravity') | float %}
+          {% set fg = states('input_number.tank_1_expected_fg') | float %}
+          {% set vel = states('sensor.gravity_24h_delta') | float / 1000 %}  {# pts/day → SG/day #}
+          {% if sg <= fg %} reached
+          {% elif vel >= -0.0005 %} stalled
+          {% else %}
+            {% set days = (sg - fg) / (vel | abs) %}
+            {{ (now() + timedelta(days=days)).strftime('%b %-d') }}
+          {% endif %}
+
+  # ---------------------------------------------------------------------------
+  # EQUIPMENT POWER STATE  (from smart-plug wattage — the REAL truth)
+  # ---------------------------------------------------------------------------
+  # The chiller SWITCH reports 'on' even when the compressor is idle, so wattage
+  # is ground truth. The GlassHaus app derives these same states client-side from
+  # the raw *_current_consumption sensors; these HA sensors exist so AUTOMATIONS
+  # can trigger on them (e.g. "kegerator off too long", "chiller short-cycling").
+  #
+  # THRESHOLDS (W) — observed 2026-07-07, mirror registry.ts POWER_THRESHOLDS:
+  #   glycol chiller:   >200 running (≈450 typical, <1 idle)
+  #   kegerator:        >10 cooling  (≈280 typical, ≈0 idle)
+  #   tank 1 controller: idle ≈0.75W; pump(cool) ≈25W. Tank 1 still has the OLD
+  #     weak heater at ~22–23W, which OVERLAPS the pump — so a mid-band draw is
+  #     ambiguous. The APP resolves it with a probe-vs-setpoint tiebreaker (heat if
+  #     probe<setpoint, cool if probe>setpoint); this text sensor can't easily do
+  #     that, so it approximates with >=60 heating / >=10 cooling and may mislabel
+  #     the old heater as "cooling" until the new 120W heater is installed.
+  #   NOTE: tanks 2/3 have 120W heaters + bigger pumps — the 120W heater is well
+  #     separated from pump draw, so a >=70 heating / >=30 cooling band classifies
+  #     them cleanly (no tiebreaker needed). Duplicate this sensor per tank with
+  #     those numbers; do NOT reuse Tank 1's.
+  - binary_sensor:
+      - name: "Glycol Chiller Running (power)"
+        unique_id: gh_glycol_running_power
+        device_class: running
+        availability: "{{ has_value('sensor.glycol_power_current_consumption') }}"
+        state: "{{ states('sensor.glycol_power_current_consumption') | float(0) > 200 }}"
+
+      - name: "Kegerator Cooling"
+        unique_id: gh_kegerator_cooling
+        device_class: cold
+        availability: "{{ has_value('sensor.kegerator_power_current_consumption') }}"
+        state: "{{ states('sensor.kegerator_power_current_consumption') | float(0) > 10 }}"
+
+  - sensor:
+      # Tank 1 controller state as a text sensor (idle/cooling/heating) — mirrors
+      # the app's classifyPower(). Uses Tank 1's bands; retune per tank.
+      - name: "Tank 1 Controller State"
+        unique_id: gh_tank1_controller_state
+        icon: mdi:thermostat
+        availability: "{{ has_value('sensor.tank_1_temp_controller_power_current_consumption') }}"
+        state: >
+          {% set w = states('sensor.tank_1_temp_controller_power_current_consumption') | float(0) %}
+          {% set probe = states('sensor.tank_1_probe_temp') | float('nan') %}
+          {% set sp = states('sensor.tank_1_setpoint') | float('nan') %}
+          {% if w < 10 %} idle
+          {% elif w >= 60 %} heating
+          {% elif probe == probe and sp == sp %}
+            {# mid-band + temps known → tiebreaker (matches the app) #}
+            {% if probe > sp + 0.5 %} cooling
+            {% elif probe < sp - 0.5 %} heating
+            {% else %} holding
+            {% endif %}
+          {% else %} cooling
+          {% endif %}
+
+  # ---------------------------------------------------------------------------
+  # ALERT BINARY_SENSORS  (automations / notifications fire on these)
+  # ---------------------------------------------------------------------------
+  - binary_sensor:
+      # Fermentation STALLED: still above expected FG, but gravity essentially
+      # flat over the last 24h. (Terminal-but-flat is NOT a stall — hence the
+      # "still above FG" guard.)
+      - name: "Tank 1 Fermentation Stalled"
+        unique_id: gh_tank1_stalled
+        device_class: problem
+        availability: >
+          {{ has_value('sensor.gravity_24h_delta') and has_value('sensor.tilt_black_gravity')
+             and has_value('input_number.tank_1_expected_fg') }}
+        state: >
+          {% set flat = (states('sensor.gravity_24h_delta') | float | abs) < 1.0 %}  {# <1 pt/24h #}
+          {% set above_fg = (states('sensor.tilt_black_gravity') | float
+                             - states('input_number.tank_1_expected_fg') | float) > 0.003 %}
+          {{ flat and above_fg }}
+        delay_on: "00:30:00"   # avoid flapping on a single quiet reading
+
+      # TEMP EXCURSION: probe more than 2°F off setpoint.
+      - name: "Tank 1 Temp Excursion"
+        unique_id: gh_tank1_temp_excursion
+        device_class: problem
+        availability: >
+          {{ has_value('sensor.tank_1_probe_temp') and has_value('sensor.tank_1_setpoint') }}
+        state: >
+          {{ (states('sensor.tank_1_probe_temp') | float
+              - states('sensor.tank_1_setpoint') | float) | abs > 2.0 }}
+        delay_on: "00:10:00"
+
+      # APPROACHING TERMINAL: within 3 pts of expected FG (time to plan cold-crash).
+      - name: "Tank 1 Approaching Terminal"
+        unique_id: gh_tank1_approaching_terminal
+        availability: >
+          {{ has_value('sensor.tilt_black_gravity') and has_value('input_number.tank_1_expected_fg') }}
+        state: >
+          {{ (states('sensor.tilt_black_gravity') | float
+              - states('input_number.tank_1_expected_fg') | float) <= 0.003 }}
+
+      # TILT SIGNAL LOST: no gravity update in 15 min (uses the age sensor above).
+      - name: "Tilt Black Signal Lost"
+        unique_id: gh_tilt_black_signal_lost
+        device_class: connectivity
+        state: >
+          {{ states('sensor.tilt_black_gravity_age') | float(999) > 15 }}
+
+      # ASSIGNMENT SUSPECT: Tilt/probe temps disagree by >5°F (mirrors the app's
+      # plausibility check so an automation can nag you to re-check the mapping).
+      - name: "Tank 1 Assignment Suspect"
+        unique_id: gh_tank1_assignment_suspect
+        device_class: problem
+        availability: "{{ has_value('sensor.tank_1_tilt_probe_temp_delta') }}"
+        state: "{{ states('sensor.tank_1_tilt_probe_temp_delta') | float | abs > 5.0 }}"
+        delay_on: "00:15:00"
+
+# =============================================================================
+# TIME-INTEGRATED METRICS  (history_stats)
+# =============================================================================
+# These are declared as `- platform: history_stats` entries under the single
+# `sensor:` key at the TOP of this file (a package allows only one `sensor:`
+# key, and the top-level `history_stats:` list form fails to merge in a package
+# with "cannot be merged, expected a dict"). See that block above.
+
+# -----------------------------------------------------------------------------
+# Fermentation degree-days & time-at-temp are best done with a Riemann-sum /
+# utility_meter on beer temp, which needs a source that resets per batch. Left
+# as a follow-up because it wants a per-batch reset hook (tie it to the future
+# Brewfather batch-sync automation). Sketch:
+#
+#   sensor:
+#     - platform: integration          # integrate beer temp over time
+#       source: sensor.tilt_black_temperature
+#       name: gh_tilt_black_temp_integral
+#       unit_time: d                    # °F·days  → divide by days for avg temp
+#       method: trapezoidal
+# -----------------------------------------------------------------------------

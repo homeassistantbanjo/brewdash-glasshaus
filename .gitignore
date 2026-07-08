@@ -1,0 +1,10 @@
+node_modules
+dist
+.env.local
+.env
+*.log
+.DS_Store
+
+# throwaway dev artifacts (screenshots, state dumps)
+.shots/
+.ha_states.json

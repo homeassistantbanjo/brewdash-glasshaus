@@ -1,0 +1,252 @@
+# =============================================================================
+# GlassHaus notification automations  —  Home Assistant PACKAGE
+# =============================================================================
+# Install alongside glasshaus_derived.yaml at <config>/packages/. These fire
+# phone notifications off the alert binary_sensors defined there, so LOAD THAT
+# FILE FIRST (these reference sensors it creates).
+#
+# Notify target: notify.mobile_app_jordans_phone  (HA Companion app on Jordan's
+# phone). IMPORTANT — use the mobile_app_* service, NOT the generic
+# notify.jordans_phone entity: only the mobile_app_* one accepts the rich `data`
+# (tag / channel / clickAction / importance) these automations rely on. The
+# generic notify.send_message wrapper 500s on `data` and can't group/replace.
+# Change the target below if you add more devices or want a notify group.
+#
+# Design:
+#   - Each alert uses a stable `tag` so a follow-up notification REPLACES the
+#     prior one instead of stacking, and the "cleared" message dismisses it.
+#   - Transient conditions (temp excursion, signal lost) notify on BOTH the
+#     trigger (on) and the recovery (off).
+#   - Milestones (approaching terminal) notify once on trigger only.
+#   - `data.channel` groups them in Android; `importance`/`push` set priority.
+#   - A tap on the notification deep-links back to the GlassHaus dashboard —
+#     EDIT the URL below to your actual GlassHaus address (kiosk / Pi / addon).
+# =============================================================================
+
+# NOTE: this is a PACKAGE, so it may only contain real integration keys at the
+# top level — no anchor-holder block. The notify target and dashboard URL are
+# therefore inlined literally below (search-replace to retarget):
+#   notify.mobile_app_jordans_phone   ← phone target
+#   http://192.168.50.250:5174/       ← GlassHaus deep-link (UPDATE to real addr)
+
+automation:
+  # ---------------------------------------------------------------------------
+  # FERMENTATION STARTED  (milestone). Latches input_boolean when active
+  # attenuation is SUSTAINED for 2h (settling/noise won't trip it), notifies
+  # once, and won't re-fire because the boolean stays on until batch reset.
+  # ---------------------------------------------------------------------------
+  - id: gh_confirm_fermentation_started
+    alias: "GlassHaus • Confirm fermentation started"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.tank_1_actively_fermenting
+        to: "on"
+        for: "02:00:00"   # sustained 2h of ≥4pt drop-from-peak → real, not settling
+    conditions:
+      # only the first confirmation per batch
+      - condition: state
+        entity_id: input_boolean.tank_1_fermentation_confirmed
+        state: "off"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.tank_1_fermentation_confirmed
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: "🫧 Tank 1 — fermentation has started"
+          message: >
+            {{ states('sensor.brewfather_recipe_name') }} is actively attenuating —
+            gravity down {{ states('sensor.tank_1_gravity_drop_from_peak') }} pts from peak
+            (now {{ states('sensor.tilt_black_gravity') }}). Krausen incoming. 🍺
+          data:
+            tag: gh_tank1_started
+            channel: GlassHaus Alerts
+            notification_icon: "mdi:beer"
+            clickAction: "http://192.168.50.250:5174/"
+
+  # Reset the latch when a NEW batch appears (OG changes) so "started" can fire
+  # again next brew. Uses sensor.batch_og (Brewfather measured OG).
+  - id: gh_reset_fermentation_latch
+    alias: "GlassHaus • Reset fermentation latch on new batch"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: sensor.batch_og
+        # any change to OG = new batch loaded
+    conditions:
+      - condition: template
+        value_template: "{{ trigger.from_state.state not in ['unknown','unavailable', none] }}"
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.tank_1_fermentation_confirmed
+
+  # ---------------------------------------------------------------------------
+  # FERMENTATION STALLED  (problem — still above FG but gravity flat >30min)
+  # ---------------------------------------------------------------------------
+  - id: gh_notify_stalled
+    alias: "GlassHaus • Fermentation stalled"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.tank_1_fermentation_stalled
+        to: "on"
+    actions:
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: "🛑 Tank 1 — fermentation stalled"
+          message: >
+            Gravity has been flat for 24h+ but is still above target FG
+            ({{ states('sensor.tilt_black_gravity') }} vs
+            {{ states('input_number.tank_1_expected_fg') }}). Check temp / rouse yeast?
+          data:
+            tag: gh_tank1_stall
+            channel: GlassHaus Alerts
+            importance: high
+            notification_icon: "mdi:beer-outline"
+            clickAction: "http://192.168.50.250:5174/"
+
+  - id: gh_notify_stalled_clear
+    alias: "GlassHaus • Fermentation stall cleared"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.tank_1_fermentation_stalled
+        to: "off"
+    actions:
+      - action: notify.mobile_app_jordans_phone
+        data:
+          message: "clear_notification"
+          data:
+            tag: gh_tank1_stall
+
+  # ---------------------------------------------------------------------------
+  # TEMP EXCURSION  (problem — probe >2°F off setpoint for 10min). Notify + clear.
+  # ---------------------------------------------------------------------------
+  - id: gh_notify_temp_excursion
+    alias: "GlassHaus • Temp excursion"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.tank_1_temp_excursion
+        to: "on"
+    actions:
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: "🌡️ Tank 1 — temperature excursion"
+          message: >
+            Probe {{ states('sensor.tank_1_probe_temp') }}°F vs setpoint
+            {{ states('sensor.tank_1_setpoint') }}°F
+            (Δ {{ (states('sensor.tank_1_probe_temp')|float - states('sensor.tank_1_setpoint')|float)|round(1) }}°F).
+          data:
+            tag: gh_tank1_temp
+            channel: GlassHaus Alerts
+            importance: high
+            color: "#f0616d"
+            clickAction: "http://192.168.50.250:5174/"
+
+  - id: gh_notify_temp_excursion_clear
+    alias: "GlassHaus • Temp excursion cleared"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.tank_1_temp_excursion
+        to: "off"
+    actions:
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: "✅ Tank 1 — temp back on profile"
+          message: "Probe {{ states('sensor.tank_1_probe_temp') }}°F, setpoint {{ states('sensor.tank_1_setpoint') }}°F."
+          data:
+            tag: gh_tank1_temp
+            channel: GlassHaus Alerts
+            clickAction: "http://192.168.50.250:5174/"
+
+  # ---------------------------------------------------------------------------
+  # APPROACHING TERMINAL  (milestone — within 3 pts of FG). Once, on trigger.
+  # ---------------------------------------------------------------------------
+  - id: gh_notify_approaching_terminal
+    alias: "GlassHaus • Approaching terminal gravity"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.tank_1_approaching_terminal
+        to: "on"
+    actions:
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: "🎯 Tank 1 — approaching terminal gravity"
+          message: >
+            {{ states('sensor.brewfather_recipe_name') }} is near FG
+            ({{ states('sensor.tilt_black_gravity') }} →
+            {{ states('input_number.tank_1_expected_fg') }}). Time to plan the cold crash.
+          data:
+            tag: gh_tank1_terminal
+            channel: GlassHaus Alerts
+            notification_icon: "mdi:flag-checkered"
+            clickAction: "http://192.168.50.250:5174/"
+
+  # ---------------------------------------------------------------------------
+  # TILT SIGNAL LOST  (connectivity — no gravity update >15min). Notify + clear.
+  # ---------------------------------------------------------------------------
+  - id: gh_notify_tilt_signal_lost
+    alias: "GlassHaus • Tilt signal lost"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.tilt_black_signal_lost
+        to: "on"
+        for: "00:05:00"   # extra grace on top of the sensor's own window
+    actions:
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: "📡 Tilt Black — signal lost"
+          message: "No gravity reading in {{ states('sensor.tilt_black_gravity_age') }} min. Check the Tilt / TiltPi bridge."
+          data:
+            tag: gh_tilt_signal
+            channel: GlassHaus Alerts
+            importance: high
+            clickAction: "http://192.168.50.250:5174/"
+
+  - id: gh_notify_tilt_signal_back
+    alias: "GlassHaus • Tilt signal restored"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.tilt_black_signal_lost
+        to: "off"
+    actions:
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: "✅ Tilt Black — signal restored"
+          message: "Gravity reading is live again ({{ states('sensor.tilt_black_gravity') }})."
+          data:
+            tag: gh_tilt_signal
+            channel: GlassHaus Alerts
+            clickAction: "http://192.168.50.250:5174/"
+
+  # ---------------------------------------------------------------------------
+  # ASSIGNMENT SUSPECT  (problem — Tilt/probe temps disagree >5°F for 15min).
+  # ---------------------------------------------------------------------------
+  - id: gh_notify_assignment_suspect
+    alias: "GlassHaus • Assignment suspect"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.tank_1_assignment_suspect
+        to: "on"
+    actions:
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: "⚠️ Tank 1 — assignment looks wrong"
+          message: >
+            Tilt beer temp and tank probe disagree by
+            {{ states('sensor.tank_1_tilt_probe_temp_delta')|float|abs|round(1) }}°F —
+            is the right Tilt assigned to Tank 1?
+          data:
+            tag: gh_tank1_assign
+            channel: GlassHaus Alerts
+            importance: high
+            notification_icon: "mdi:help-rhombus-outline"
+            clickAction: "http://192.168.50.250:5174/"
