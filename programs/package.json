@@ -1,0 +1,11 @@
+{
+  "name": "glasshaus-programs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GlassHaus fermentation-programs runner — tick state machine, drive setpoints via HA",
+  "scripts": {
+    "start": "node runner.mjs",
+    "test": "node statemachine.test.mjs"
+  }
+}

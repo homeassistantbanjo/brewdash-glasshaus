@@ -11,7 +11,7 @@
 //   input_button.tank_N_confirm_crash  the crash-confirm gate
 //   sensor.tank_N_program_status       (written by us: human status string + attrs)
 import { PRESETS } from './presets.mjs';
-import { tick } from './statemachine.mjs';
+import { tick, resolveStartPhase } from './statemachine.mjs';
 
 const HA_URL = req('HA_URL');
 const HA_TOKEN = req('HA_TOKEN');
@@ -35,7 +35,7 @@ async function callService(domain, service, data) {
 async function tickTank(tankId, by) {
   const s = (id) => by[`${id}`]?.state;
   const programKey = s(`input_select.${tankId}_program`);
-  if (!usable(programKey) || programKey === 'None') return; // no program running
+  if (!usable(programKey) || programKey === 'None') { adopted.delete(tankId); return; } // no program → reset adopt guard
 
   const program = resolveProgram(programKey, by, tankId);
   if (!program) { console.log(`[${tankId}] unknown program '${programKey}'`); return; }
@@ -62,6 +62,25 @@ async function tickTank(tankId, by) {
     progressToFgPct: numOr(s('sensor.attenuation_progress')),
     gravity24hDeltaPts: numOr(s('sensor.gravity_24h_delta')),
   };
+
+  // ADOPT an in-progress ferment: on a FRESH start (phase 0, just set) jump to the
+  // phase the beer is actually in, so starting a program mid-fermentation doesn't
+  // wrongly begin at pitch. Runs once per start (guarded by adopted set).
+  if (phaseIndex === 0 && phaseElapsedHours < (TICK_MINUTES / 60) * 1.5 && !adopted.has(tankId)) {
+    adopted.add(tankId);
+    const startPhase = resolveStartPhase(program, state);
+    if (startPhase > 0) {
+      console.log(`[${tankId}] adopting in-progress ferment → start at phase ${startPhase} (${program.phases[startPhase].name})`);
+      if (!DRY_RUN) {
+        await callService('input_number', 'set_value',
+          { entity_id: `input_number.${tankId}_program_phase`, value: startPhase });
+        await callService('input_datetime', 'set_datetime',
+          { entity_id: `input_datetime.${tankId}_program_phase_started`, datetime: nowIso() });
+      }
+      state.phaseIndex = startPhase;
+      state.phaseElapsedHours = 0;
+    }
+  }
 
   const r = tick(program, state);
   const phase = program.phases[phaseIndex];
@@ -115,9 +134,10 @@ function resolveProgram(key, by, tankId) {
   return null;
 }
 
-// track crash-confirm presses + per-phase start setpoints in memory between ticks
+// track crash-confirm presses + per-phase start setpoints + adopt-once guard between ticks
 const pendingConfirm = new Set();
 const phaseStartSetpoints = new Map();
+const adopted = new Set(); // tanks whose in-progress ferment we've already adopted this run
 
 function nowIso() { return new Date().toISOString(); }
 

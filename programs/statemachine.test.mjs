@@ -1,5 +1,5 @@
 import { PRESETS } from './presets.mjs';
-import { tick, _internals } from './statemachine.mjs';
+import { tick, resolveStartPhase, _internals } from './statemachine.mjs';
 let pass=0, fail=0;
 const ok=(n,c)=>{ if(c)pass++; else {fail++;console.log('  ✗ FAIL:',n);} };
 
@@ -32,6 +32,12 @@ r=tick(lm,{phaseIndex:1,phaseElapsedHours:15,phaseStartSetpointF:69,currentSetpo
 ok('terminal met', r.advanceTo===2);
 r=tick(lm,{phaseIndex:1,phaseElapsedHours:15,phaseStartSetpointF:69,currentSetpointF:69,gravity:1.020,expectedFg:1.010,gravity24hDeltaPts:-0.3,apparentAttenuationPct:70});
 ok('terminal NOT met above FG', r.advanceTo===null);
+
+// --- adoption: starting a program mid-ferment jumps to the right phase ---
+ok('adopt fresh pitch → phase 0', resolveStartPhase(lm,{apparentAttenuationPct:2,gravity:1.049,expectedFg:1.010,gravity24hDeltaPts:-1})===0);
+ok('adopt 60% atten → ramp phase 1', resolveStartPhase(lm,{apparentAttenuationPct:60,gravity:1.020,expectedFg:1.010,gravity24hDeltaPts:-6})===1);
+ok('adopt terminal → cleanup phase 2', resolveStartPhase(lm,{apparentAttenuationPct:80,gravity:1.011,expectedFg:1.010,gravity24hDeltaPts:-0.3})===2);
+ok('adopt never skips gated crash', resolveStartPhase(PRESETS.coldcrash,{apparentAttenuationPct:99,gravity:1.008,expectedFg:1.010,gravity24hDeltaPts:0})===0);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

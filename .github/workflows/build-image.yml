@@ -1,9 +1,11 @@
 name: Build & publish container images
 
-# Builds two images on every push to main and publishes to ghcr.io; Unraid pulls
-# them. Both are TOKEN-FREE (HA/Claude keys injected at runtime), safe in the registry.
-#   - dashboard  → ghcr.io/<repo>:latest        (the GlassHaus kiosk, deploy/Dockerfile)
-#   - analyzer   → ghcr.io/<repo>-analyzer:latest (the LLM insight service, analyzer/Dockerfile)
+# Builds three images on every push to main and publishes to ghcr.io; Unraid pulls
+# them. All are TOKEN-FREE (HA/Claude keys injected at runtime), safe in the registry.
+#   - dashboard  → ghcr.io/<repo>:latest          (the GlassHaus kiosk, deploy/Dockerfile)
+#   - analyzer   → ghcr.io/<repo>-analyzer:latest  (LLM insight service, analyzer/Dockerfile)
+#   - programs   → ghcr.io/<repo>-programs:latest  (fermentation control runner, programs/Dockerfile;
+#                                                   DRY_RUN=true by default — never writes until flipped)
 
 on:
   push:
@@ -28,6 +30,10 @@ jobs:
             file: analyzer/Dockerfile
             context: analyzer
             suffix: "-analyzer"
+          - name: programs
+            file: programs/Dockerfile
+            context: programs
+            suffix: "-programs"
     steps:
       - uses: actions/checkout@v4
 

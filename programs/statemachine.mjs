@@ -24,7 +24,9 @@ function rateLimit(target, currentSetpointF) {
 }
 
 // --- advance-condition evaluation ---------------------------------------------
-function conditionMet(cond, s) {
+// `adopting` = we're deciding the START phase for an already-in-progress ferment,
+// so time-in-phase requirements don't apply (the beer's been going, this phase hasn't).
+function conditionMet(cond, s, adopting = false) {
   if (!cond) return false;
   switch (cond.type) {
     case 'attenuation':
@@ -32,7 +34,9 @@ function conditionMet(cond, s) {
     case 'progressToFg':
       return s.progressToFgPct != null && s.progressToFgPct >= cond.pct;
     case 'elapsed':
-      return s.phaseElapsedHours != null && s.phaseElapsedHours >= cond.hours;
+      // when adopting, we can't know past phase time → treat as NOT satisfied (don't skip a
+      // timed hold blindly); during a run, use the phase clock.
+      return !adopting && s.phaseElapsedHours != null && s.phaseElapsedHours >= cond.hours;
     case 'active':
       // fermentation started: gravity dropping meaningfully OR already well below OG
       return (s.gravity24hDeltaPts != null && s.gravity24hDeltaPts <= -2)
@@ -41,14 +45,35 @@ function conditionMet(cond, s) {
       if (s.gravity == null || s.expectedFg == null || s.gravity24hDeltaPts == null) return false;
       const flat = Math.abs(s.gravity24hDeltaPts) < TERMINAL_FLAT_PTS;
       const nearFg = (s.gravity - s.expectedFg) <= TERMINAL_NEAR_FG_SG;
-      // require BOTH flat AND at/near FG, held for a while (phase has run >= 12h)
-      return flat && nearFg && (s.phaseElapsedHours ?? 0) >= 12;
+      // during a run require it held ≥12h; when adopting, current flat+nearFG is enough.
+      return flat && nearFg && (adopting || (s.phaseElapsedHours ?? 0) >= 12);
     }
     case 'confirm':
       return s.confirmPressed === true;
     default:
       return false;
   }
+}
+
+/**
+ * ADOPT an in-progress ferment: pick the phase the beer is currently "in" by
+ * walking phases and skipping any whose advance condition is ALREADY satisfied
+ * — but NEVER auto-skip a gated (requiresConfirm) phase like cold crash. Returns
+ * the phase index to start at. For a fresh pitch this returns 0 (nothing skipped).
+ */
+export function resolveStartPhase(program, state) {
+  let i = 0;
+  for (; i < program.phases.length; i++) {
+    const phase = program.phases[i];
+    // never skip INTO/PAST a gated phase automatically — stop here and let it await confirm
+    if (phase.requiresConfirm) break;
+    // if this phase's exit condition is already met, the beer is past it → skip
+    if (phase.advance && conditionMet(phase.advance, { ...state, phaseElapsedHours: 999 }, true)) {
+      continue;
+    }
+    break; // this is the phase we're in
+  }
+  return Math.min(i, program.phases.length - 1);
 }
 
 // target temp for the current phase (before clamp/rate-limit)
