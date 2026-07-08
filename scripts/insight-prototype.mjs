@@ -67,8 +67,15 @@ DATA LITERACY — critical, do not get these wrong:
   progressToFgPct as "attenuation". Near the end they diverge (e.g. 74% atten but 95% to FG).
 - gravity24hDelta_pts is POINTS/day (×1000 SG). Near terminal a small/~0 delta is EXPECTED.
 
+PACKAGING READINESS (do NOT get wrong): terminal gravity ≠ ready to package. "Terminal" needs
+gravity STABLE ~3 consecutive days (dry-hopped/NEIPA 5-7 days, hop creep). After terminal the
+beer still needs D-REST (2-3 days near FG, elevated), THEN cold crash, THEN conditioning. When
+gravity is flat at FG, advise "verify stable / hold for D-rest cleanup" — NEVER "proceed to
+package" (telemetry can't confirm crash+conditioning are done; default to caution).
+
 FOCUS: attenuation on pace vs schedule? gravity slope flattening EARLY (before ~70% apparent
-attenuation)? temperature holding setpoint? equipment concern? else say nominal. Only raise
+attenuation)? temperature holding setpoint? equipment concern? where in the ferment→D-rest→crash
+→condition→package arc, and the NEXT step (don't skip to packaging)? else say nominal. Only raise
 severity above "info" for something a brewer would actually act on. Output ONLY valid JSON:
 {"severity":"info|watch|problem","headline":"<=70 chars","detail":"1-3 sentences","action":"concrete next step or empty"}.`;
 

@@ -14,7 +14,7 @@ import {
 import { toReading, composeBatch, normalizeReading } from '../data/derive';
 import {
   TANKS, PLANT, PLANT_DIAG, KEGERATOR, POWER_THRESHOLDS, tankControllerEnergy,
-  tiltEntities, tiltStatEntities, derivedEntities, tiltSignalLostEntity,
+  tiltEntities, tiltStatEntities, derivedEntity, tiltSignalLostEntity,
   ALL_TILT_COLORS, TankConfig,
 } from '../data/registry';
 import { useBreweryActions } from './useBreweryActions';
@@ -449,92 +449,45 @@ interface AssignmentInputs {
   // extra diagnostics for the card's 3rd metric row (null when unavailable)
   gravityDropFromPeak: number | null;  // pts below 8h peak
   tiltGravityAgeMin: number | null;    // minutes since last Tilt reading
-  coolingRuntime7dH: number | null;    // hours chiller ran (7d)
-}
-
-/** state of the given entity, or of its fallback if the preferred is absent. */
-function firstState(pref: ReturnType<typeof safeEntity>, fall: ReturnType<typeof safeEntity>): string | undefined {
-  const usable = (s: string | undefined) => s != null && s !== 'unknown' && s !== 'unavailable';
-  if (pref && usable(pref.state)) return pref.state;
-  if (fall && usable(fall.state)) return fall.state;
-  return undefined;
 }
 
 function useTankAssignmentInputs(cfg: TankConfig): AssignmentInputs {
   const tilt = safeEntity(cfg.tiltAssign);
   const batch = safeEntity(cfg.batchAssign);
   const fg = safeEntity(`input_number.${cfg.id}_expected_fg`);
-
-  // optional derived sensors (preferred per-tank id + Tank-1 fallback)
-  const d = derivedEntities(cfg.id);
-  const startPref = safeEntity(d.fermentationStarted.preferred);
-  const startFall = safeEntity(d.fermentationStarted.fallback ?? 'binary_sensor.__none__');
-  const fgReachPref = safeEntity(d.projectedFgReach.preferred);
-  const fgReachFall = safeEntity(d.projectedFgReach.fallback ?? 'sensor.__none__');
-  const pacePref = safeEntity(d.paceVsSchedule.preferred);
-  const paceFall = safeEntity(d.paceVsSchedule.fallback ?? 'sensor.__none__');
-
-  // alert binary_sensors (pref per-tank + Tank-1 fallback)
-  const stalledP = safeEntity(d.alertStalled.preferred);
-  const stalledF = safeEntity(d.alertStalled.fallback ?? 'binary_sensor.__none__');
-  const excurP = safeEntity(d.alertTempExcursion.preferred);
-  const excurF = safeEntity(d.alertTempExcursion.fallback ?? 'binary_sensor.__none__');
-  const termP = safeEntity(d.alertApproachingTerminal.preferred);
-  const termF = safeEntity(d.alertApproachingTerminal.fallback ?? 'binary_sensor.__none__');
-  const suspP = safeEntity(d.alertAssignmentSuspect.preferred);
-  const suspF = safeEntity(d.alertAssignmentSuspect.fallback ?? 'binary_sensor.__none__');
-
-  // extra diagnostics for the 3rd metric row
-  const dropP = safeEntity(d.gravityDropFromPeak.preferred);
-  const dropF = safeEntity(d.gravityDropFromPeak.fallback ?? 'sensor.__none__');
-  const ageP = safeEntity(d.tiltGravityAge.preferred);
-  const ageF = safeEntity(d.tiltGravityAge.fallback ?? 'sensor.__none__');
-  const runP = safeEntity(d.coolingRuntime7d.preferred);
-  const runF = safeEntity(d.coolingRuntime7d.fallback ?? 'sensor.__none__');
+  // ONE generic derived entity (written by the programs container's deriveTank).
+  // Its attributes carry everything the app used to read from a dozen sensors.
+  const derived = safeEntity(derivedEntity(cfg.id));
 
   return useMemo(() => {
     const changed = [tilt?.last_changed, batch?.last_changed]
       .map((s) => (s ? Date.parse(s) : null))
       .filter((n): n is number => n != null);
-    const startState = firstState(startPref, startFall);
-    const paceState = firstState(pacePref, paceFall);
 
-    // active-alert helper: 'on' from the preferred sensor, else the fallback
-    const isOn = (p: typeof tilt, f: typeof tilt) => firstState(p, f) === 'on';
-    const alerts: TankAlert[] = [];
-    if (isOn(stalledP, stalledF))
-      alerts.push({ key: 'stalled', severity: 'problem', label: 'STALLED', entityId: d.alertStalled.preferred });
-    if (isOn(excurP, excurF))
-      alerts.push({ key: 'temp_excursion', severity: 'problem', label: 'TEMP EXCURSION', entityId: d.alertTempExcursion.preferred });
-    if (isOn(suspP, suspF))
-      alerts.push({ key: 'assignment_suspect', severity: 'problem', label: 'ASSIGNMENT SUSPECT', entityId: d.alertAssignmentSuspect.preferred });
-    if (isOn(termP, termF))
-      alerts.push({ key: 'approaching_terminal', severity: 'milestone', label: 'NEAR TERMINAL', entityId: d.alertApproachingTerminal.preferred });
-
-    const num = (p: typeof tilt, f: typeof tilt) => {
-      const s = firstState(p, f);
-      return s != null ? Number(s) : null;
-    };
+    // pull derived values from the entity's attributes; null-safe when absent
+    // (container not deployed yet / tank has no data → app degrades gracefully).
+    const a = (derived?.attributes as any) || {};
+    const numAttr = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+    const rawAlerts = Array.isArray(a.alerts) ? a.alerts : [];
+    const alerts: TankAlert[] = rawAlerts.map((x: any) => ({
+      key: String(x.key), severity: x.severity, label: String(x.label),
+      entityId: derivedEntity(cfg.id),
+    }));
 
     return {
       tiltSel: tilt?.state,
       batchSel: batch?.state,
       expectedFg: fg?.state ? Number(fg.state) : null,
       assignedAt: changed.length ? Math.max(...changed) : null,
-      fermentationStarted: startState != null ? startState === 'on' : null,
-      projectedFgReach: firstState(fgReachPref, fgReachFall) ?? null,
-      paceVsSchedule: paceState != null ? Number(paceState) : null,
+      fermentationStarted: typeof a.fermentationStarted === 'boolean' ? a.fermentationStarted : null,
+      projectedFgReach: typeof a.projectedFgReach === 'string' ? a.projectedFgReach : null,
+      paceVsSchedule: numAttr(a.paceVsSchedule),
       alerts,
-      gravityDropFromPeak: num(dropP, dropF),
-      tiltGravityAgeMin: num(ageP, ageF),
-      coolingRuntime7dH: num(runP, runF),
+      gravityDropFromPeak: numAttr(a.dropFromPeakPts),
+      tiltGravityAgeMin: numAttr(a.gravityAgeMin),
     };
   }, [tilt?.state, tilt?.last_changed, batch?.state, batch?.last_changed, fg?.state,
-      startPref?.state, startFall?.state, fgReachPref?.state, fgReachFall?.state,
-      pacePref?.state, paceFall?.state,
-      stalledP?.state, stalledF?.state, excurP?.state, excurF?.state,
-      termP?.state, termF?.state, suspP?.state, suspF?.state,
-      dropP?.state, dropF?.state, ageP?.state, ageF?.state, runP?.state, runF?.state]);
+      derived?.state, derived?.attributes]);
 }
 
 // ---------------------------------------------------------------------------
@@ -567,7 +520,7 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
   const batches = tanks.map((tank, i) => {
     const { tiltSel, batchSel, expectedFg, assignedAt,
       fermentationStarted, projectedFgReach, paceVsSchedule, alerts: tankAlerts,
-      gravityDropFromPeak, tiltGravityAgeMin, coolingRuntime7dH } = assignments[i];
+      gravityDropFromPeak, tiltGravityAgeMin } = assignments[i];
 
     // "None"/"none" (either casing) both mean "no Tilt assigned" — the HA
     // helper uses 'None', batch helpers use 'none'; tolerate both.
@@ -605,7 +558,6 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
       composed.paceVsSchedule = paceVsSchedule;
       composed.gravityDropFromPeak = gravityDropFromPeak;
       composed.tiltGravityAgeMin = tiltGravityAgeMin;
-      composed.coolingRuntime7dH = coolingRuntime7dH;
 
       // Assemble alerts: the tank-scoped HA sensors + signal-lost (resolved via
       // the assigned Tilt color) + the app's OWN client-side suspect check (in

@@ -73,9 +73,23 @@ DATA LITERACY — critical, do not get these wrong:
 - gravity24hDelta_pts is in POINTS/day (×1000 SG); e.g. -10 = -0.010 SG/day. Near terminal a
   small negative or ~0 delta is EXPECTED and fine, not a problem.
 
+PACKAGING READINESS — do NOT get this wrong (common bad advice):
+- Reaching terminal gravity does NOT mean "ready to package." Terminal is just the FIRST step.
+- "Terminal" itself requires the gravity be STABLE for ~3 CONSECUTIVE DAYS (dry-hopped/NEIPA:
+  5-7 days after dry-hopping, due to HOP CREEP re-fermenting late sugars). One flat reading is
+  not terminal.
+- After confirmed-terminal, the beer still needs: a completed DIACETYL REST (hold near FG at
+  elevated temp ~2-3 days so yeast clean up diacetyl/acetaldehyde), THEN cold crash, THEN
+  conditioning/lagering. Packaging is the END of that chain.
+- So when gravity is flat at FG, the right advice is "verify stable N days / hold for D-rest
+  cleanup," NEVER "proceed to package." Only suggest packaging if D-rest + crash + conditioning
+  are clearly done (which this telemetry usually can't confirm — so default to caution).
+
 ANALYSIS FOCUS: is attenuation on pace vs schedule? Is the gravity SLOPE meaningfully
 flattening EARLY (before ~70% apparent attenuation = possible high finish / real stall)?
-Is temperature holding the setpoint? Any equipment concern? Otherwise say it's nominal.
+Is temperature holding the setpoint? Any equipment concern? Where in the ferment→D-rest→crash
+→condition→package arc is it, and what's the NEXT step (not skipping ahead to packaging)?
+Otherwise say it's nominal.
 
 Only raise severity above "info" for something a brewer would actually act on. Output ONLY
 valid JSON (no markdown, no code fences):

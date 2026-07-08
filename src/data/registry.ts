@@ -185,67 +185,16 @@ export const ALL_TILT_COLORS: TiltColor[] = [
  * return the preferred per-tank id plus a legacy fallback (same pattern as the
  * Tilt stat sensors). Add per-tank YAML later and the fallback drops away.
  */
-export function derivedEntities(tankId: string) {
-  const n = tankId.replace('tank_', ''); // '1'
-  const isTank1 = tankId === 'tank_1';
-  const pick = (perTank: string, legacy: string | null) => ({
-    preferred: perTank,
-    fallback: isTank1 ? legacy : null,
-  });
-  return {
-    // one-shot latched "fermentation has really started" (settling-proof)
-    fermentationStarted: pick(
-      `binary_sensor.tank_${n}_fermentation_started`,
-      'binary_sensor.tank_1_fermentation_started',
-    ),
-    // projected calendar date the batch reaches expected FG (string like 'Jul 8')
-    projectedFgReach: pick(
-      `sensor.tank_${n}_projected_fg_reach`,
-      'sensor.projected_fg_reach',
-    ),
-    // days ahead(+)/behind(-) the Brewfather schedule
-    paceVsSchedule: pick(
-      `sensor.tank_${n}_fermentation_pace`,
-      'sensor.fermentation_pace_vs_schedule',
-    ),
-
-    // --- alert binary_sensors (device_class problem/connectivity) ---
-    // Names in glasshaus_derived.yaml → HA entity_ids below. Today only the
-    // Tank-1 variants exist (Tank-1 fallback), per-tank when the YAML is templated.
-    alertStalled: pick(
-      `binary_sensor.tank_${n}_fermentation_stalled`,
-      'binary_sensor.tank_1_fermentation_stalled',
-    ),
-    alertTempExcursion: pick(
-      `binary_sensor.tank_${n}_temp_excursion`,
-      'binary_sensor.tank_1_temp_excursion',
-    ),
-    alertApproachingTerminal: pick(
-      `binary_sensor.tank_${n}_approaching_terminal`,
-      'binary_sensor.tank_1_approaching_terminal',
-    ),
-    alertAssignmentSuspect: pick(
-      `binary_sensor.tank_${n}_assignment_suspect`,
-      'binary_sensor.tank_1_assignment_suspect',
-    ),
-
-    // --- extra diagnostics surfaced on the card's 3rd metric row ---
-    // cumulative attenuation signal (settling-proof): SG points below 8h peak
-    gravityDropFromPeak: pick(
-      `sensor.tank_${n}_gravity_drop_from_peak`,
-      'sensor.tank_1_gravity_drop_from_peak',
-    ),
-    // minutes since the Tilt last pushed a reading (freshness)
-    tiltGravityAge: pick(
-      `sensor.tilt_${n}_gravity_age`,     // placeholder per-tank; today Black-only
-      'sensor.tilt_black_gravity_age',
-    ),
-    // hours the glycol chiller ran for THIS tank over 7d (cooling duty)
-    coolingRuntime7d: pick(
-      `sensor.tank_${n}_cooling_runtime_7d`,
-      'sensor.tank_1_cooling_runtime_7d',
-    ),
-  };
+/**
+ * The ONE generic per-tank derived entity, written by the programs container's
+ * deriveTank() loop. Its ATTRIBUTES carry everything the app used to read from a
+ * dozen Black-only sensors: attenuationPct, progressToFgPct, dropFromPeakPts,
+ * daysToTerminal, projectedFgReach, tiltProbeDeltaF, gravityAgeMin,
+ * fermentationStarted (latched), activelyFermenting, alerts[]. Generic for every
+ * tank — no per-tank YAML, no Tank-1 fallback hack. (Replaced derivedEntities().)
+ */
+export function derivedEntity(tankId: string): string {
+  return `sensor.${tankId}_derived`;
 }
 
 /** Plant-wide diagnostic sensors (not per-tank). NOTE: there's deliberately no

@@ -296,8 +296,6 @@ export interface ActiveBatch {
   gravityDropFromPeak: number | null;
   /** minutes since the Tilt last pushed a gravity reading (freshness) */
   tiltGravityAgeMin: number | null;
-  /** hours the glycol chiller ran for this tank over the last 7 days (cooling duty) */
-  coolingRuntime7dH: number | null;
 
   /** raw gravity/temp readings for inline sparklines, oldest→newest.
    *  Sourced from all_batches_data.readings[] (per-Tilt). */
