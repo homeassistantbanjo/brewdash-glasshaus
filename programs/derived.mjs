@@ -64,6 +64,15 @@ export function computeDerived(t, now = 0) {
   const daysToTerminal = calcDaysToTerminal(gravity, fg, velSg);
   const projectedFgReach = projectedFgDate(gravity, fg, velSg, now);
 
+  // Pace vs schedule: days ahead(+)/behind(-) the planned ferment window, by
+  // attenuation progress vs elapsed fraction. Mirrors the old YAML gh_ferment_pace.
+  // planned_days from Brewfather fermentation window if given, else 7 (TODO expose).
+  const daysFermenting = n(t.daysFermenting);
+  const plannedDays = n(t.plannedFermentDays) ?? 7;
+  const paceVsSchedule = (progressToFgPct != null && daysFermenting != null && plannedDays > 0)
+    ? round(((progressToFgPct / 100) - Math.min(daysFermenting / plannedDays, 1)) * plannedDays, 1)
+    : null;
+
   // settling-proof cumulative drop from the rolling 8h peak (pts)
   const peak = n(t.gravity8hMaxSg);
   const dropFromPeakPts = (peak != null && gravity != null)
@@ -97,8 +106,8 @@ export function computeDerived(t, now = 0) {
   alerts.sort((a, b) => rank[a.severity] - rank[b.severity]);
 
   return {
-    attenuationPct, progressToFgPct, dropFromPeakPts, daysToTerminal, projectedFgReach,
-    tiltProbeDeltaF, gravityAgeMin, fermentationStarted, activelyFermenting, alerts,
+    attenuationPct, progressToFgPct, paceVsSchedule, dropFromPeakPts, daysToTerminal,
+    projectedFgReach, tiltProbeDeltaF, gravityAgeMin, fermentationStarted, activelyFermenting, alerts,
   };
 }
 

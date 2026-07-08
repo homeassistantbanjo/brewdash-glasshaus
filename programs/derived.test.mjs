@@ -46,5 +46,13 @@ ok('no-Tilt tank: attenuation null', r.attenuationPct===null);
 ok('no-Tilt tank: not active/latched', r.activelyFermenting===false && r.fermentationStarted===false);
 ok('no-Tilt tank: no false alerts', r.alerts.length===0);
 
+// pace: 75% to FG at day 3 of a 7-day plan → ahead of schedule (positive)
+r = computeDerived({ gravity:1.020, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:-8, gravity8hMaxSg:1.025, gravityAgeMin:0,
+  daysFermenting:3, plannedFermentDays:7 }, NOW);
+ok('pace computed (ahead → positive)', r.paceVsSchedule !== null && r.paceVsSchedule > 0);
+ok('pace null without daysFermenting', computeDerived({ gravity:1.02, og:1.05, expectedFg:1.01,
+  gravity24hDeltaPts:-8, gravity8hMaxSg:1.025 }, NOW).paceVsSchedule === null);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
