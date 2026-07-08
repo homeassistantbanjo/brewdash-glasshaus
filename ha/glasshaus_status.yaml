@@ -1,0 +1,82 @@
+# =============================================================================
+# GlassHaus tank STATUS + assignment helpers  (Home Assistant PACKAGE)
+# =============================================================================
+# Install: <config>/packages/glasshaus_status.yaml (packages already enabled), restart HA.
+#
+# ⚠️ These helpers ALREADY EXIST in your HA config (created earlier via the UI).
+# Package + UI-created helpers with the SAME entity_id COLLIDE. So BEFORE installing:
+#   Delete the old UI helpers (Settings → Devices & Services → Helpers) for:
+#     tank_1/2/3_status, tank_1/2/3_tilt, tank_1/2/3_batch,
+#     tank_1/2/3_last_cleaned, tank_1/2/3_expected_fg
+#   OR only move the ones you want version-controlled. This file version-controls
+#   them so restarts DON'T wipe edits (e.g. the 'Cold Crashing' status option that
+#   got reverted when the API set_options was lost on restart).
+#
+# NOTE: batch options are AUTO-SYNCED by the app from Brewfather (useSyncBatchOptions),
+# so the batch helper's options here are just a seed — the app overwrites them live.
+# =============================================================================
+
+input_select:
+  tank_1_status: &status_opts
+    name: Tank 1 Status
+    icon: mdi:state-machine
+    options:
+      - "Ready"
+      - "Fermenting"
+      - "Cold Crashing"
+      - "Dirty"
+  tank_2_status:
+    <<: *status_opts
+    name: Tank 2 Status
+  tank_3_status:
+    <<: *status_opts
+    name: Tank 3 Status
+
+  tank_1_tilt: &tilt_opts
+    name: Tank 1 Tilt
+    icon: mdi:thermometer
+    options: ["None", "Black", "Red", "Blue"]
+  tank_2_tilt:
+    <<: *tilt_opts
+    name: Tank 2 Tilt
+  tank_3_tilt:
+    <<: *tilt_opts
+    name: Tank 3 Tilt
+
+  tank_1_batch: &batch_opts
+    name: Tank 1 Batch
+    icon: mdi:glass-mug-variant
+    options: ["None"]        # seed only — app auto-syncs from Brewfather fermenting set
+  tank_2_batch:
+    <<: *batch_opts
+    name: Tank 2 Batch
+  tank_3_batch:
+    <<: *batch_opts
+    name: Tank 3 Batch
+
+input_number:
+  tank_1_expected_fg: &fg
+    name: Tank 1 Expected FG
+    icon: mdi:target
+    min: 0.990
+    max: 1.030
+    step: 0.001
+    mode: box
+  tank_2_expected_fg:
+    <<: *fg
+    name: Tank 2 Expected FG
+  tank_3_expected_fg:
+    <<: *fg
+    name: Tank 3 Expected FG
+
+input_datetime:
+  tank_1_last_cleaned: &cleaned
+    name: Tank 1 Last Cleaned
+    has_date: true
+    has_time: false
+  tank_2_last_cleaned:
+    <<: *cleaned
+    name: Tank 2 Last Cleaned
+  tank_3_last_cleaned:
+    <<: *cleaned
+    name: Tank 3 Last Cleaned

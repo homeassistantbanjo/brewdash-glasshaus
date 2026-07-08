@@ -185,8 +185,13 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '20px 0' }}>
             <ConicalFermenter state={vessel} width={116} height={186} />
-            <div style={{ fontFamily: theme.font.sans, fontSize: 13, color: theme.color.textDim, textAlign: 'center' }}>
-              {!tank.hasController ? 'No controller wired' : idleNote(tank)}
+            <div style={{ fontFamily: theme.font.sans, fontSize: 13, color: theme.color.textDim, textAlign: 'center', padding: '0 12px' }}>
+              {!tank.hasController ? 'No controller wired'
+                /* status says active but no batch resolved (e.g. >1 fermenting → can't
+                   auto-infer) — tell the user to assign, NOT "out of service". */
+                : isActiveBrew(tank.status)
+                  ? '⚠ Batch unassigned — ⚙ Manage to pick which beer is in this tank'
+                  : idleNote(tank)}
             </div>
           </div>
         )}
