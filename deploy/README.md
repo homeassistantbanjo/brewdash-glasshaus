@@ -1,59 +1,54 @@
 # GlassHaus — Unraid kiosk deployment
 
-Serves the GlassHaus dashboard for the wall/staging tablet. The container clones
-this repo, builds it with your HA token, serves the static `dist/`, and re-pulls
-+ rebuilds every few minutes so pushes to GitHub go live automatically.
+Serves the GlassHaus dashboard for the wall/staging tablet. GitHub Actions builds
+a **token-free** image on every push to `main` and publishes it to the GitHub
+Container Registry; Unraid **pulls the prebuilt image**. The HA URL/token are
+injected at container startup from env vars (written into `config.js`), so no
+secret ever lives in git or the registry image.
 
-**Architecture reminder:** GlassHaus is a static SPA. The tablet's *browser* talks
-directly to Home Assistant over WebSocket using the token baked into the JS at
-build time. This container never proxies HA — it only serves files. Because the
-token is in the bundle, keep the whole thing on your **Tailscale tailnet / LAN
-only** — never expose it to the public internet.
+Image: `ghcr.io/homeassistantbanjo/brewdash-glasshaus:latest`
 
-## Prerequisites
-- Unraid with Docker (Compose Manager plugin recommended)
-- Tailscale on Unraid + the tablet (already configured)
-- A **private** GitHub repo `homeassistantbanjo/brewdash-glasshaus` (this code)
-- A GitHub **fine-grained PAT**, read-only, scoped to just this repo (for cloning)
-- Your HA URL + a long-lived HA token
+**Architecture:** GlassHaus is a static SPA — the tablet's *browser* talks
+directly to Home Assistant's WebSocket using the token from `config.js`. The
+container only serves files. Because the token reaches the browser, keep
+everything on **Tailscale / LAN only** — never expose to the internet.
 
-## Steps
+## One-time: make the ghcr image pullable
 
-1. **Copy `deploy/` to Unraid** (or clone the repo there). Put a `.env` file next
-   to `docker-compose.yml` with your real values (this `.env` is NOT in git):
-   ```
-   GIT_REPO=https://github.com/homeassistantbanjo/brewdash-glasshaus.git
-   GIT_TOKEN=github_pat_xxxxx
-   VITE_HA_URL=http://192.168.50.127:8123
-   VITE_HA_TOKEN=eyJ...your-long-lived-HA-token...
-   POLL_SECONDS=300
-   ```
+1. In GitHub, the image is published under the repo's Packages. If the package is
+   **private** (default), Unraid needs a token to pull it: create a
+   **fine-grained PAT** (or classic token) with `read:packages`, or make the
+   package public (Repo → Packages → package → Package settings → change visibility).
+   Simplest for a home setup: **make the package public** — the image is
+   token-free, so nothing sensitive is exposed by a public *image*.
 
-2. **Start it** (Compose Manager → add stack, or CLI):
-   ```
-   docker compose -f deploy/docker-compose.yml up -d --build
-   ```
-   First run clones + `npm ci` + builds (a few minutes). Watch logs:
-   `docker logs -f glasshaus`
+## Add the container on Unraid (Docker tab → Add Container)
 
-3. **Reach it** at `http://<unraid-tailscale-name>:8099/` (or the Unraid LAN IP).
-   Confirm the dashboard loads and shows live tank data.
+- **Name:** `glasshaus`
+- **Repository:** `ghcr.io/homeassistantbanjo/brewdash-glasshaus:latest`
+- **Network:** Bridge
+- **Port:** add a port mapping — Container `80` → Host `8099`
+- **Env variables** (Add another Path/Port/Variable → Variable):
+  - `VITE_HA_URL` = `http://192.168.50.127:8123`
+  - `VITE_HA_TOKEN` = `<your long-lived HA token>`
+- (If the ghcr package stayed private) under **Registry authentication**, or via
+  `docker login ghcr.io` on Unraid first, provide a `read:packages` token.
+- Apply. First pull + start takes a moment; then browse `http://<unraid-ip>:8099/`.
 
-4. **Point the tablet** (Fully Kiosk Browser recommended) at that URL:
-   - Start URL = `http://<unraid-tailscale-name>:8099/`
-   - Enable: keep screen on, launch on boot, auto-reload on connection loss
-   - Tablet must be on the tailnet.
+## Point the tablet at it (Fully Kiosk Browser recommended)
 
-## Auto-build
-The container polls the repo every `POLL_SECONDS`. Push to `main` → within that
-window it pulls, rebuilds, and the static server serves the new files. Force an
-immediate update by restarting the container.
+- Start URL: `http://<unraid-tailscale-name-or-ip>:8099/`
+- Enable: keep screen on, launch on boot, auto-reload on connection loss
+- Tablet must be on the tailnet / same LAN.
 
-## Notes / gotchas
-- **Webfont:** the "ICONOCLAST BREWING" banner uses Anton from Google Fonts, so
-  the tablet needs internet at page load (falls back to JetBrains Mono offline).
-  Self-host the font if the kiosk must work fully offline.
-- **HA token scope:** consider a dedicated limited HA user for GlassHaus so the
-  baked-in token has minimal blast radius if the page ever leaks.
-- **Battery:** on a permanently-plugged wall tablet, cap charging ~80% if the
-  device supports it (or power via a scheduled smart plug) to avoid swelling.
+## Auto-update
+
+Push to `main` → GitHub Actions rebuilds + republishes `:latest`. To pull the new
+image on Unraid: click **Force update** on the container (or install the
+**CA Auto Update Applications** plugin to auto-pull `:latest` on a schedule).
+
+## Notes
+- Anton webfont (banner) loads from Google Fonts → tablet needs internet at page
+  load (falls back to JetBrains Mono offline). Self-host the font for full offline.
+- Consider a dedicated, scoped HA user/token for GlassHaus to limit blast radius.
+- `deploy/docker-compose.yml` is provided too, if you use the Compose Manager plugin.
