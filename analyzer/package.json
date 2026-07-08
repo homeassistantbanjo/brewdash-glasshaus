@@ -1,0 +1,10 @@
+{
+  "name": "glasshaus-analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GlassHaus insight analyzer — gathers HA fermentation data, calls Claude, writes sensor.glasshaus_insight",
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}

@@ -97,6 +97,9 @@ export const PLANT = {
   glycolEnergyTotal: 'sensor.glycol_power_total_consumption',
   brewfatherAll: 'sensor.brewfather_all_batches_data',
   brewfatherStatus: 'sensor.brewfather_integration_status',
+  // LLM insight entity written by the analyzer container (state=headline;
+  // attrs: severity, detail, action). Null-safe: absent until the analyzer runs.
+  insight: 'sensor.glasshaus_insight',
 } as const;
 
 /**

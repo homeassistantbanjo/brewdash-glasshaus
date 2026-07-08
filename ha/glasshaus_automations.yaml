@@ -250,3 +250,63 @@ automation:
             importance: high
             notification_icon: "mdi:help-rhombus-outline"
             clickAction: "http://192.168.50.250:5174/"
+
+  # ---------------------------------------------------------------------------
+  # LLM INSIGHTS (analyzer container) — two hooks:
+  #  1) tell the analyzer to run immediately when any real alert fires (on-alert)
+  #  2) push the resulting insight to the phone when sensor.glasshaus_insight updates
+  # Analyzer runs on Unraid; UPDATE the URL/port if different (default :8091).
+  # ---------------------------------------------------------------------------
+  - id: gh_insight_trigger_on_alert
+    alias: "GlassHaus • Trigger insight analysis on alert"
+    mode: single
+    triggers:
+      - trigger: state
+        to: "on"
+        entity_id:
+          - binary_sensor.tank_1_fermentation_stalled
+          - binary_sensor.tank_1_temp_excursion
+          - binary_sensor.tank_1_approaching_terminal
+          - binary_sensor.tank_1_assignment_suspect
+          - binary_sensor.tilt_black_signal_lost
+    actions:
+      - action: rest_command.glasshaus_insight_trigger
+        data:
+          reason: "{{ trigger.entity_id }}"
+    # NOTE: define the rest_command below (in configuration.yaml or a package):
+    #   rest_command:
+    #     glasshaus_insight_trigger:
+    #       url: "http://192.168.50.118:8091/trigger"
+    #       method: POST
+    #       content_type: "application/json"
+    #       payload: '{"reason": "{{ reason }}"}'
+
+  - id: gh_notify_insight
+    alias: "GlassHaus • Notify on new insight"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: sensor.glasshaus_insight
+    conditions:
+      # skip empty/unknown states and the very first 'unknown->value' restore
+      - condition: template
+        value_template: >
+          {{ trigger.to_state.state not in ['unknown','unavailable','',none]
+             and trigger.from_state.state != trigger.to_state.state }}
+    actions:
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: >
+            {% set sev = state_attr('sensor.glasshaus_insight','severity') %}
+            {{ '🛑' if sev=='problem' else '👀' if sev=='watch' else '🍺' }} GlassHaus insight
+          message: >
+            {{ states('sensor.glasshaus_insight') }}
+            {% set a = state_attr('sensor.glasshaus_insight','action') %}
+            {% if a %} — {{ a }}{% endif %}
+          data:
+            tag: gh_insight
+            channel: GlassHaus Insights
+            importance: >
+              {{ 'high' if state_attr('sensor.glasshaus_insight','severity')=='problem' else 'default' }}
+            notification_icon: "mdi:brain"
+            clickAction: "http://192.168.50.118:8099/"

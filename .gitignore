@@ -8,3 +8,6 @@ dist
 # throwaway dev artifacts (screenshots, state dumps)
 .shots/
 .ha_states.json
+
+# LLM prototype key (never commit)
+.anthropic-key

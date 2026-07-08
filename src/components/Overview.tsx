@@ -5,8 +5,9 @@ import { Metric } from './Metric';
 import { EquipmentStrip } from './EquipmentStrip';
 import { AlertBar } from './AlertBar';
 import { GraphsView } from './GraphsView';
+import { InsightPanel } from './InsightPanel';
 import { theme, stateColor, hexA } from '../theme/tokens';
-import { useActiveBatches, useGlycol, useEquipment, useSyncBatchOptions, usePlantDiag } from '../hooks/useBrewery';
+import { useActiveBatches, useGlycol, useEquipment, useSyncBatchOptions, usePlantDiag, useInsight } from '../hooks/useBrewery';
 import { Tank, isActiveBrew } from '../types/domain';
 import logo from '../assets/iconoclast-logo.jpg';
 
@@ -15,6 +16,7 @@ export function Overview() {
   const glycol = useGlycol();
   const equipment = useEquipment();
   const plantDiag = usePlantDiag();
+  const insight = useInsight();
   // keep each tank's batch picker options in sync with Brewfather's live
   // Fermenting set (adds new batches, prunes departed ones → marks tank Dirty)
   useSyncBatchOptions();
@@ -95,6 +97,8 @@ export function Overview() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          {/* LLM insight badge (auto-opens for problems) */}
+          <InsightPanel insight={insight} />
           {/* view toggle: tank cards ↔ dedicated big-charts view */}
           <div style={{ display: 'flex', gap: 4 }}>
             {(['tanks', 'graphs'] as const).map((v) => (

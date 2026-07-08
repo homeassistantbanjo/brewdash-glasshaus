@@ -252,6 +252,34 @@ function classifyPower(
  */
 /** Plant-wide glycol compressor cycles in the last hour (short-cycling signal).
  *  Shared across tanks; read once and passed down. null if sensor absent. */
+/** The latest LLM insight (from the analyzer container's sensor.glasshaus_insight).
+ *  null when the entity doesn't exist yet / analyzer not deployed. */
+export interface Insight {
+  severity: 'info' | 'watch' | 'problem';
+  headline: string;
+  detail: string;
+  action: string;
+  /** epoch ms the entity last changed — used to detect "new" for auto-popup */
+  updatedAt: number | null;
+}
+
+export function useInsight(): Insight | null {
+  const e = safeEntity(PLANT.insight);
+  return useMemo(() => {
+    const st = e?.state;
+    if (st == null || st === 'unknown' || st === 'unavailable' || st === '') return null;
+    const a = (e?.attributes as any) || {};
+    const sev = a.severity;
+    return {
+      severity: (sev === 'problem' || sev === 'watch') ? sev : 'info',
+      headline: st,
+      detail: a.detail || '',
+      action: a.action || '',
+      updatedAt: e?.last_changed ? Date.parse(e.last_changed) : null,
+    };
+  }, [e?.state, e?.last_changed, e?.attributes]);
+}
+
 /** Plant-wide glycol chiller diagnostics (shared loop, NOT per-tank): compressor
  *  cycles in the last hour (short-cycling signal) + total runtime over 7 days.
  *  Surfaced in the top strip next to the chiller chip. null when sensor absent. */

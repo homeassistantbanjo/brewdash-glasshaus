@@ -1,9 +1,9 @@
-name: Build & publish container image
+name: Build & publish container images
 
-# Builds the GlassHaus image on every push to main and publishes it to the GitHub
-# Container Registry (ghcr.io). Unraid pulls this prebuilt image — auto-updating
-# the wall kiosk when you push. The image is TOKEN-FREE (HA token injected at
-# runtime on Unraid), so it's safe to store in the registry.
+# Builds two images on every push to main and publishes to ghcr.io; Unraid pulls
+# them. Both are TOKEN-FREE (HA/Claude keys injected at runtime), safe in the registry.
+#   - dashboard  → ghcr.io/<repo>:latest        (the GlassHaus kiosk, deploy/Dockerfile)
+#   - analyzer   → ghcr.io/<repo>-analyzer:latest (the LLM insight service, analyzer/Dockerfile)
 
 on:
   push:
@@ -17,6 +17,17 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: dashboard
+            file: deploy/Dockerfile
+            context: .
+            suffix: ""
+          - name: analyzer
+            file: analyzer/Dockerfile
+            context: analyzer
+            suffix: "-analyzer"
     steps:
       - uses: actions/checkout@v4
 
@@ -30,15 +41,14 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push
+      - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: deploy/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: true
-          # lowercase owner/repo for ghcr; :latest + the commit SHA
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ghcr.io/${{ github.repository }}${{ matrix.suffix }}:latest
+            ghcr.io/${{ github.repository }}${{ matrix.suffix }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
