@@ -17,6 +17,70 @@ Hosts:
 
 ---
 
+## ⚡ RE-PULL RUNBOOK — updating the 3 containers (the `:latest` cache gotcha)
+
+Editing a container in the Unraid UI and hitting *Apply* often **re-runs the SAME cached
+`:latest` image** — that's why "update" appeared to do nothing before. The fix is to force-
+remove the local image so Docker MUST re-pull. Do this in the **Unraid web terminal** (the
+`>_` icon, top-right of the Unraid GUI).
+
+**Order matters** (the app + notify automations read `sensor.tank_N_derived`, which only the
+*programs* container writes): **programs → dashboard → analyzer**.
+
+Container names below assume the Unraid defaults `Glasshaus`, `Glasshaus-programs`,
+`Glasshaus-analyzer`. If yours differ, run `docker ps --format '{{.Names}}\t{{.Image}}'`
+first and substitute.
+
+```sh
+# ── 0. See what's actually running + on which image ──────────────────────────
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+
+# ── 1. PROGRAMS first (writes sensor.tank_N_derived → feeds the whole app) ────
+docker stop Glasshaus-programs && docker rm Glasshaus-programs
+docker rmi ghcr.io/homeassistantbanjo/brewdash-glasshaus-programs:latest
+docker pull ghcr.io/homeassistantbanjo/brewdash-glasshaus-programs:latest
+#   → then recreate from the Unraid UI: Docker tab → Glasshaus-programs is now
+#     an "orphan" template → click it → Apply. It rebuilds with your saved env
+#     (HA_URL, HA_TOKEN, DRY_RUN=true) on the freshly-pulled image.
+#   Verify:  docker logs -f Glasshaus-programs   (should tick + log per-tank derive)
+
+# ── 2. DASHBOARD ─────────────────────────────────────────────────────────────
+docker stop Glasshaus && docker rm Glasshaus
+docker rmi ghcr.io/homeassistantbanjo/brewdash-glasshaus:latest
+docker pull ghcr.io/homeassistantbanjo/brewdash-glasshaus:latest
+#   → recreate via Docker tab → Glasshaus template → Apply.
+
+# ── 3. ANALYZER (only if you want LLM insight notifications) ─────────────────
+docker stop Glasshaus-analyzer && docker rm Glasshaus-analyzer
+docker rmi ghcr.io/homeassistantbanjo/brewdash-glasshaus-analyzer:latest
+docker pull ghcr.io/homeassistantbanjo/brewdash-glasshaus-analyzer:latest
+#   → recreate via Docker tab → Glasshaus-analyzer template → Apply.
+```
+
+**Why `docker rm` + recreate-from-template instead of just `docker restart`?** `restart`
+reuses the running container (old image). Removing it and re-Applying the Unraid template
+recreates it on the newly-pulled image **while keeping every env var / port / path** you set
+in the template — nothing to re-type.
+
+**Alternative (no UI, if you prefer):** the Unraid UI stores the exact `docker run` in
+`/boot/config/plugins/dockerMan/templates-user/my-<Name>.xml`. But recreating from the UI
+template (above) is safer than hand-writing `docker run` — it can't drift from your saved config.
+
+### After the re-pull — verify it took (run from anywhere on the LAN)
+```sh
+# programs is writing the derived entity? (empty result = still old image)
+curl -s -H "Authorization: Bearer $HA_TOKEN" \
+  http://192.168.50.127:8123/api/states/sensor.tank_1_derived | head -c 200
+# dashboard bundle changed? (compare the hash before/after)
+curl -s http://192.168.50.118:8099/ | grep -oE 'assets/index-[^"]+\.js'
+# analyzer alive?
+curl -s http://192.168.50.118:8091/health
+```
+Then hard-reload the dashboard/kiosk (Ctrl-Shift-R, or Fully Kiosk → clear cache) so the
+tablet drops the old JS bundle. Pace / attenuation / alerts populate once step 1 is live.
+
+---
+
 ## 0. Already live ✅
 - Dashboard container running on Unraid → `http://192.168.50.118:8099/`.
 - HA packages `glasshaus_derived.yaml` + `glasshaus_automations.yaml` installed.
