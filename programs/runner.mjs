@@ -12,6 +12,7 @@
 //   sensor.tank_N_program_status       (written by us: human status string + attrs)
 import { PRESETS } from './presets.mjs';
 import { tick, resolveStartPhase } from './statemachine.mjs';
+import { computeDerived } from './derived.mjs';
 
 const HA_URL = req('HA_URL');
 const HA_TOKEN = req('HA_TOKEN');
@@ -151,6 +152,91 @@ async function writeStatus(tankId, obj) {
   }).catch(() => {});
 }
 
+// ---------------------------------------------------------------------------
+// GENERIC per-tank DERIVED values + alerts (replaces the Black-only derived YAML).
+// Read-only w.r.t. control — only computes + writes sensor.tank_N_derived. Never
+// touches setpoints, so it cannot affect the safety-critical program path.
+// ---------------------------------------------------------------------------
+const gravWindow = new Map();   // tankId → [{t, sg}] rolling ~8h for the settling-proof peak
+const latchState = new Map();   // tankId → { batchKey, latched } one-shot fermentation-started
+
+// resolve a tank's live gravity/temp from its ASSIGNED Tilt color (generic — any color)
+function tiltData(by, tiltColor) {
+  if (!tiltColor || tiltColor.toLowerCase() === 'none') return { gravity: null, tempF: null, ageMin: null };
+  const c = tiltColor.toLowerCase();
+  const g = by[`sensor.tilt_${c}_gravity`];
+  const tp = by[`sensor.tilt_${c}_temperature`];
+  const gv = g && g.state !== 'unknown' && g.state !== 'unavailable' ? Number(g.state) : null;
+  const ageMin = g?.last_updated ? (Date.now() - Date.parse(g.last_updated)) / 60000 : null;
+  return { gravity: Number.isFinite(gv) ? gv : null,
+    tempF: tp && tp.state !== 'unavailable' ? Number(tp.state) : null, ageMin };
+}
+
+function roll8hMax(tankId, sg) {
+  if (sg == null) return null;
+  const now = Date.now();
+  const buf = gravWindow.get(tankId) || [];
+  buf.push({ t: now, sg });
+  const cutoff = now - 8 * 3600_000;
+  const kept = buf.filter((x) => x.t >= cutoff);
+  gravWindow.set(tankId, kept);
+  return Math.max(...kept.map((x) => x.sg));
+}
+
+async function deriveTank(tankId, by) {
+  const s = (id) => by[id]?.state;
+  const num = (v) => { const x = Number(v); return Number.isFinite(x) ? x : null; };
+  const usable = (v) => v != null && v !== 'unknown' && v !== 'unavailable' && v !== '';
+
+  const tiltSel = s(`input_select.${tankId}_tilt`);
+  const { gravity, tempF, ageMin } = tiltData(by, tiltSel);
+  const batchSel = s(`input_select.${tankId}_batch`);
+  // OG for this tank's batch: match the assigned batch in all_batches_data
+  const bfData = by['sensor.brewfather_all_batches_data']?.attributes?.data || [];
+  const batch = bfData.find((b) => b.name === batchSel || String(b.batchNo) === batchSel) || null;
+  const og = batch?.measuredOg != null ? Number(batch.measuredOg) : null;
+  const fermentingStartMs = batch?.fermentingStart ? Date.parse(batch.fermentingStart) : null;
+
+  // 24h delta: prefer the per-color Tilt stat if present, else the Black legacy one
+  const c = tiltSel?.toLowerCase();
+  const delta = num(s(`sensor.tilt_${c}_gravity_24h_stat`)) != null
+    ? num(s(`sensor.tilt_${c}_gravity_24h_stat`)) * 1000  // stat is SG → pts
+    : num(s('sensor.gravity_24h_delta'));                 // legacy pts (Black)
+
+  const gravity8hMaxSg = roll8hMax(tankId, gravity);
+
+  // latch state, reset when the batch changes
+  const batchKey = batchSel || 'none';
+  const prev = latchState.get(tankId);
+  if (!prev || prev.batchKey !== batchKey) latchState.set(tankId, { batchKey, latched: false });
+  const prevLatched = latchState.get(tankId).latched;
+
+  const d = computeDerived({
+    gravity, og,
+    expectedFg: num(s(`input_number.${tankId}_expected_fg`)),
+    beerTempF: tempF,
+    probeTempF: num(s(`sensor.${tankId}_probe_temp`)),
+    setpointF: num(s(`sensor.${tankId}_setpoint`)),
+    gravity24hDeltaPts: delta,
+    gravity8hMaxSg,
+    gravityAgeMin: ageMin,
+    daysFermenting: fermentingStartMs ? (Date.now() - fermentingStartMs) / 86_400_000 : null,
+    prevLatched,
+  }, Date.now());
+
+  // persist the latch (one-shot until batch changes)
+  if (d.fermentationStarted) latchState.get(tankId).latched = true;
+
+  // write ONE generic per-tank entity the app + notifications read
+  await fetch(`${HA_URL}/api/states/sensor.${tankId}_derived`, {
+    method: 'POST', headers: H,
+    body: JSON.stringify({
+      state: d.alerts[0]?.label || (d.fermentationStarted ? 'fermenting' : 'nominal'),
+      attributes: { friendly_name: `${tankId} derived`, tank: tankId, ...d },
+    }),
+  }).catch((e) => console.error(`[${tankId}] derived write failed:`, e.message));
+}
+
 async function tickAll() {
   try {
     const states = await get('/api/states');
@@ -160,6 +246,9 @@ async function tickAll() {
       const btn = by[`input_button.${t}_confirm_crash`];
       if (btn && Date.now() - Date.parse(btn.state || 0) < TICK_MINUTES * 60_000) pendingConfirm.add(t);
     }
+    // GENERIC derived + alerts for every tank (read-only; separate from control)
+    for (const t of TANKS) await deriveTank(t, by).catch((e) => console.error(`[${t}] derive:`, e.message));
+    // program control (writes setpoints) — unchanged
     for (const t of TANKS) await tickTank(t, by);
   } catch (e) {
     console.error('[programs] tick failed:', e.message);
