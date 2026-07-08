@@ -88,19 +88,26 @@ export function computeDerived(t, now = 0) {
   const gravityAgeMin = n(t.gravityAgeMin);
 
   // --- alert conditions (severity: problem | warning | milestone) ---
+  // GRAVITY-based alerts require a batch actually ASSIGNED to this tank (OG present).
+  // Without that, any Tilt reading is either absent or BORROWED from another tank's
+  // Tilt (e.g. two tanks both pointed at "Black") — computing stall/near-terminal off
+  // it is meaningless and produces false alerts on empty/unassigned tanks.
+  const hasBatch = og != null;
   const alerts = [];
   const dev = (n(t.probeTempF) != null && n(t.setpointF) != null) ? t.probeTempF - t.setpointF : null;
   const flat = delta != null && Math.abs(delta) < STALL_FLAT_PTS;
   const aboveFg = (gravity != null && fg != null) && (gravity - fg) > STALL_ABOVE_FG_SG;
-  if (flat && aboveFg)
+  if (hasBatch && flat && aboveFg)
     alerts.push({ key: 'stalled', severity: 'problem', label: 'STALLED' });
+  // temp excursion is NOT gravity-based — a controller running off setpoint matters
+  // even on a tank with no batch assigned, so this one is not gated on hasBatch.
   if (dev != null && Math.abs(dev) > EXCURSION_F)
     alerts.push({ key: 'temp_excursion', severity: 'problem', label: 'TEMP EXCURSION' });
-  if (tiltProbeDeltaF != null && Math.abs(tiltProbeDeltaF) > SUSPECT_DELTA_F)
+  if (hasBatch && tiltProbeDeltaF != null && Math.abs(tiltProbeDeltaF) > SUSPECT_DELTA_F)
     alerts.push({ key: 'assignment_suspect', severity: 'problem', label: 'ASSIGNMENT SUSPECT' });
-  if (gravityAgeMin != null && gravityAgeMin > SIGNAL_LOST_MIN)
+  if (hasBatch && gravityAgeMin != null && gravityAgeMin > SIGNAL_LOST_MIN)
     alerts.push({ key: 'signal_lost', severity: 'warning', label: 'TILT SIGNAL LOST' });
-  if (gravity != null && fg != null && (gravity - fg) <= NEAR_TERMINAL_SG)
+  if (hasBatch && gravity != null && fg != null && (gravity - fg) <= NEAR_TERMINAL_SG)
     alerts.push({ key: 'approaching_terminal', severity: 'milestone', label: 'NEAR TERMINAL' });
   const rank = { problem: 0, warning: 1, milestone: 2 };
   alerts.sort((a, b) => rank[a.severity] - rank[b.severity]);

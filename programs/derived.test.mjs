@@ -46,6 +46,18 @@ ok('no-Tilt tank: attenuation null', r.attenuationPct===null);
 ok('no-Tilt tank: not active/latched', r.activelyFermenting===false && r.fermentationStarted===false);
 ok('no-Tilt tank: no false alerts', r.alerts.length===0);
 
+// BORROWED TILT (Tank 3 real case): another tank's Tilt gravity is visible + near
+// FG, but NO batch assigned here (og null) → gravity-based alerts must be SILENT.
+r = computeDerived({ gravity:1.011, og:null, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:-0.2, gravity8hMaxSg:1.012, gravityAgeMin:1 }, NOW);
+ok('borrowed-tilt: no near-terminal without a batch', !r.alerts.some(a=>a.key==='approaching_terminal'));
+ok('borrowed-tilt: no stall without a batch', !r.alerts.some(a=>a.key==='stalled'));
+ok('borrowed-tilt: attenuation null (no og)', r.attenuationPct===null);
+// but a temp excursion on a batchless tank STILL fires (controller safety, not gravity)
+r = computeDerived({ gravity:null, og:null, expectedFg:1.010, beerTempF:null, probeTempF:75,
+  setpointF:66, gravity24hDeltaPts:null, gravity8hMaxSg:null, gravityAgeMin:null }, NOW);
+ok('batchless tank still reports temp excursion', r.alerts.some(a=>a.key==='temp_excursion'));
+
 // pace: 75% to FG at day 3 of a 7-day plan → ahead of schedule (positive)
 r = computeDerived({ gravity:1.020, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
   setpointF:66, gravity24hDeltaPts:-8, gravity8hMaxSg:1.025, gravityAgeMin:0,
