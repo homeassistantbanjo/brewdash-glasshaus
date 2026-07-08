@@ -78,7 +78,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
   const b = batch; // shorthand for the specs below (only used when fermenting)
 
   return (
-    <div onClick={onClick} style={{
+    <div style={{
       background: theme.color.panelHi,
       backdropFilter: `blur(${theme.blur})`,
       WebkitBackdropFilter: `blur(${theme.blur})`,
@@ -99,22 +99,38 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
       // sparkline region flexes to fill/absorb whatever's left (see below), so a
       // short display (e.g. 1080p fullscreen at 150% scaling ≈ 720px) compresses
       // the trends rather than spawning a scrollbar. overflow hidden = hard no-scroll.
-      overflow: 'hidden', cursor: 'pointer', height: '100%', minHeight: 0,
+      overflow: 'hidden', height: '100%', minHeight: 0,
     }}>
-      {/* header */}
+      {/* header — tank label · status · explicit ⚙ Manage button (opens the
+          Assign/Program modal). The card body is NOT clickable; only metrics
+          (detail popups) and this button do anything, so it's unambiguous. */}
       <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-        padding: '12px 14px 8px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: '10px 12px 8px', gap: 8,
       }}>
         <span style={{ fontFamily: theme.font.mono, fontSize: 13, fontWeight: 700, color: theme.color.text, letterSpacing: 0.5 }}>
           {tank.label}
         </span>
-        <span style={{
-          fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 1,
-          textTransform: 'uppercase', color: accent, fontWeight: 600,
-        }}>
-          {crashing ? '❄ COLD CRASH' : fermenting ? phaseGuess(batch!) : tank.status}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{
+            fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 1,
+            textTransform: 'uppercase', color: accent, fontWeight: 600,
+          }}>
+            {crashing ? '❄ COLD CRASH' : fermenting ? phaseGuess(batch!) : tank.status}
+          </span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onClick(); }}
+            title={`Manage ${tank.label}`}
+            style={{
+              fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 0.5,
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '4px 9px', borderRadius: 6, cursor: 'pointer',
+              border: `1px solid ${theme.color.panelBorderHi}`,
+              background: theme.color.inset, color: theme.color.textLabel,
+            }}>
+            <span style={{ fontSize: 12 }}>⚙</span> MANAGE
+          </button>
+        </div>
       </div>
 
       {/* HERO vessel — the big glanceable status signal. Flanked by the two

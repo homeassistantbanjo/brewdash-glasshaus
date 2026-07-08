@@ -70,7 +70,7 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
           <span style={{ fontFamily: theme.font.mono, fontSize: 18, fontWeight: 700, color: theme.color.text }}>
-            {tank.label} — Assign
+            {tank.label} — Manage
           </span>
           <button onClick={onClose} style={closeBtn}>✕</button>
         </div>
