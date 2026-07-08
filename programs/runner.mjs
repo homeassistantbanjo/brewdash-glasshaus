@@ -1,0 +1,148 @@
+// Fermentation programs RUNNER — ties the (tested) state machine to Home Assistant.
+// Ticks every TICK_MINUTES: for each tank running a program, read program-state
+// helpers + live sensors from HA, run tick(), and (if changed) write the setpoint
+// + advance the phase. Config via env (NEVER git): HA_URL, HA_TOKEN,
+// [TICK_MINUTES=20], [DRY_RUN=true to log-only, never write setpoints].
+//
+// HA state entities per tank (created by ha/glasshaus_programs.yaml):
+//   input_select.tank_N_program        which preset (or 'None'/'Custom')
+//   input_number.tank_N_program_phase  current phase index
+//   input_datetime.tank_N_program_phase_started   phase start (for elapsed)
+//   input_button.tank_N_confirm_crash  the crash-confirm gate
+//   sensor.tank_N_program_status       (written by us: human status string + attrs)
+import { PRESETS } from './presets.mjs';
+import { tick } from './statemachine.mjs';
+
+const HA_URL = req('HA_URL');
+const HA_TOKEN = req('HA_TOKEN');
+const TICK_MINUTES = Number(process.env.TICK_MINUTES || 20);
+const DRY_RUN = /^(1|true|yes)$/i.test(process.env.DRY_RUN || '');
+const TANKS = (process.env.TANKS || 'tank_1,tank_2,tank_3').split(',').map((t) => t.trim());
+
+function req(k) { const v = process.env[k]; if (!v) { console.error(`missing env ${k}`); process.exit(1); } return v; }
+const H = { Authorization: `Bearer ${HA_TOKEN}`, 'content-type': 'application/json' };
+const get = (p) => fetch(`${HA_URL}${p}`, { headers: H }).then((r) => r.json());
+const numOr = (v, d = null) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+const usable = (s) => s != null && s !== 'unknown' && s !== 'unavailable' && s !== '';
+
+async function callService(domain, service, data) {
+  const r = await fetch(`${HA_URL}/api/services/${domain}/${service}`, {
+    method: 'POST', headers: H, body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error(`${domain}.${service} HTTP ${r.status}`);
+}
+
+async function tickTank(tankId, by) {
+  const s = (id) => by[`${id}`]?.state;
+  const programKey = s(`input_select.${tankId}_program`);
+  if (!usable(programKey) || programKey === 'None') return; // no program running
+
+  const program = resolveProgram(programKey, by, tankId);
+  if (!program) { console.log(`[${tankId}] unknown program '${programKey}'`); return; }
+
+  const phaseIndex = numOr(s(`input_number.${tankId}_program_phase`), 0);
+  const phaseStartedIso = s(`input_datetime.${tankId}_program_phase_started`);
+  const phaseElapsedHours = phaseStartedIso
+    ? (Date.now() - Date.parse(phaseStartedIso)) / 3.6e6 : 0;
+  const currentSetpointF = numOr(by[`number.${tankId}_setpoint_raw`]?.state) != null
+    ? numOr(by[`number.${tankId}_setpoint_raw`].state) / 10 : null;
+
+  // gravity staleness: signal-lost sensor OR gravity age > threshold
+  const gravityStale = by['binary_sensor.tilt_black_signal_lost']?.state === 'on';
+  const confirmPressed = pendingConfirm.has(tankId);
+
+  const state = {
+    phaseIndex, phaseElapsedHours, currentSetpointF,
+    phaseStartSetpointF: numOr(phaseStartSetpoints.get(tankId), currentSetpointF),
+    gravityStale, confirmPressed,
+    gravity: numOr(s('sensor.tilt_black_gravity')),
+    expectedFg: numOr(s(`input_number.${tankId}_expected_fg`)),
+    og: numOr(s('sensor.batch_og')),
+    apparentAttenuationPct: numOr(s('sensor.apparent_attenuation')),
+    progressToFgPct: numOr(s('sensor.attenuation_progress')),
+    gravity24hDeltaPts: numOr(s('sensor.gravity_24h_delta')),
+  };
+
+  const r = tick(program, state);
+  const phase = program.phases[phaseIndex];
+  const statusStr = r.done ? 'complete'
+    : r.awaitingConfirm ? `awaiting crash confirm`
+    : r.paused ? `paused (${r.note})`
+    : `${phase?.name}: ${r.setpointF}°F`;
+
+  // write program status entity (for app + notifications)
+  await writeStatus(tankId, {
+    program: program.label, phase: phase?.name ?? 'done', phaseIndex,
+    setpointF: r.setpointF, awaitingConfirm: !!r.awaitingConfirm, paused: !!r.paused,
+    done: !!r.done, note: r.note, status: statusStr,
+  });
+
+  if (r.done) { console.log(`[${tankId}] program complete`); return; }
+
+  // write the setpoint if it changed meaningfully (and not dry-run)
+  if (r.setpointF != null && (currentSetpointF == null || Math.abs(r.setpointF - currentSetpointF) >= 0.1)) {
+    console.log(`[${tankId}] setpoint ${currentSetpointF}→${r.setpointF}°F (${r.note})${DRY_RUN ? ' [DRY_RUN]' : ''}`);
+    if (!DRY_RUN) {
+      await callService('number', 'set_value',
+        { entity_id: `number.${tankId}_setpoint_raw`, value: Math.round(r.setpointF * 10) });
+    }
+  }
+
+  // advance phase
+  if (r.advanceTo != null) {
+    console.log(`[${tankId}] advance phase ${phaseIndex}→${r.advanceTo}`);
+    if (!DRY_RUN) {
+      await callService('input_number', 'set_value',
+        { entity_id: `input_number.${tankId}_program_phase`, value: r.advanceTo });
+      await callService('input_datetime', 'set_datetime',
+        { entity_id: `input_datetime.${tankId}_program_phase_started`, datetime: nowIso() });
+      phaseStartSetpoints.set(tankId, r.setpointF); // remember start for next phase's ramp
+    }
+    pendingConfirm.delete(tankId); // consumed
+  }
+}
+
+function resolveProgram(key, by, tankId) {
+  const map = { 'Ale — free-rise + D-rest': 'ale', 'Lager — Brülosophy fast': 'lager_fast',
+    'Lager — modern (ale-temp)': 'lager_modern', 'Kveik — warm & fast': 'kveik',
+    'Cold crash only': 'coldcrash' };
+  if (PRESETS[key]) return PRESETS[key];
+  if (map[key]) return PRESETS[map[key]];
+  if (key === 'Custom') {
+    // custom program stored as JSON in an input_text attribute (future); skip for now
+    return null;
+  }
+  return null;
+}
+
+// track crash-confirm presses + per-phase start setpoints in memory between ticks
+const pendingConfirm = new Set();
+const phaseStartSetpoints = new Map();
+
+function nowIso() { return new Date().toISOString(); }
+
+async function writeStatus(tankId, obj) {
+  await fetch(`${HA_URL}/api/states/sensor.${tankId}_program_status`, {
+    method: 'POST', headers: H,
+    body: JSON.stringify({ state: obj.status.slice(0, 255), attributes: { friendly_name: `${tankId} program`, ...obj } }),
+  }).catch(() => {});
+}
+
+async function tickAll() {
+  try {
+    const states = await get('/api/states');
+    const by = Object.fromEntries(states.map((e) => [e.entity_id, e]));
+    // pick up crash-confirm button presses (input_button last_changed within this tick window)
+    for (const t of TANKS) {
+      const btn = by[`input_button.${t}_confirm_crash`];
+      if (btn && Date.now() - Date.parse(btn.state || 0) < TICK_MINUTES * 60_000) pendingConfirm.add(t);
+    }
+    for (const t of TANKS) await tickTank(t, by);
+  } catch (e) {
+    console.error('[programs] tick failed:', e.message);
+  }
+}
+
+console.log(`[programs] runner up. tick every ${TICK_MINUTES}min. DRY_RUN=${DRY_RUN}. tanks=${TANKS}`);
+tickAll();
+setInterval(tickAll, TICK_MINUTES * 60_000);

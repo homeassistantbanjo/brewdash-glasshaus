@@ -64,6 +64,67 @@ the manual control uses.
 - Does terminal-gravity detection reuse the existing near-terminal binary_sensor, or need
   a stricter "flat for N hours at/below FG" check for program advancement?
 
+## Phase primitives (builder + presets share these)
+Every program is an ordered list of phases. Each phase = one primitive + params +
+an advance condition. Primitives:
+- **hold** {tempF, until: time|attenuation|terminal|manual} — sit at a temp until a condition.
+- **ramp** {stepF, everyHours, targetF} — step temp toward target by stepF each interval.
+- **wait** {hours} — hold current temp for a duration (e.g. cleanup/D-rest window).
+- **coldCrash** {targetF (~34-38), mode: gradual(stepF/everyHours) | asap} — drop to clarify.
+Advance conditions available to any phase: `attenuation >= X%` (apparent), `terminal`
+(gravity flat near expected FG for N h), `elapsed >= H hours`, `manual`.
+
+### GATED phases (require explicit confirmation) — Jordan's rule
+A phase can be marked `requiresConfirm: true`. When the program reaches it, it does
+NOT auto-run — it PAUSES, sets program state to "awaiting confirm", and prompts
+(phone notification + in-app button). Nothing happens to the setpoint until Jordan
+taps confirm. **The COLD CRASH phase is always gated by default** — crashing is a
+point-of-no-return (deciding the beer is done), so the program holds at the end of
+cleanup/D-rest and waits for "Confirm crash" before dropping temp. (Jordan can also
+decline / extend the hold, or crash early manually.) Confirmation is delivered by
+writing to an `input_button`/`input_boolean` the tick automation checks, and/or a
+notification action.
+
+## Researched preset library (step-patterns, style-family not yeast-specific)
+Numbers grounded in current practice (Brülosophy Lager Method; BYO; homebrew consensus) —
+all params are DEFAULTS the builder can override per batch.
+
+1. **Ale — standard free-rise + D-rest**
+   - hold pitchTempF (≈2°F below target) until fermentation active
+   - hold targetF (64–68°F) until **~75% progress to FG**
+   - ramp free-rise +2°F/12h to targetF+3 (D-rest), hold until **terminal**
+   - wait 48h (cleanup) → done (or → cold crash)
+2. **Lager — Brülosophy fast/quick method** (your classic)
+   - hold 50–55°F until **50% attenuation**
+   - ramp +5°F/12h until 65–68°F (D-rest)
+   - hold until **terminal** + clean (no diacetyl)
+   - coldCrash gradual −5–8°F/12h to 32°F, wait 3–5 days
+3. **Lager — modern "ale-temp" (Marshall/Brülosophy newer)** (YOUR method)
+   - hold ~64°F until **50% attenuation**
+   - ramp +3–5°F/6–12h until 68–69°F
+   - hold 68–69°F until **terminal**
+   - wait <cleanup hours> (D-rest) → coldCrash
+4. **Kveik — warm & fast**
+   - hold high (85–95°F) until **terminal** (kveik loves heat, no D-rest needed)
+   - → cold crash optional
+5. **Cold crash only** — coldCrash to 34–38°F (gradual or asap), set status → Cold Crashing.
+6. **Custom** — user composes phases from the primitives above; save as a named preset.
+
+### CONFIRMED default params (Jordan, 2026-07-08) — overridable per batch:
+- **Ale:** pitch 64°F, hold 66°F, free-rise at 75% progress-to-FG, +2°F/12h → 69°F D-rest, terminal, 48h cleanup.
+- **Lager (Brülosophy fast):** pitch/hold 52°F to 50% atten, +5°F/12h → 66°F, terminal.
+- **Lager (modern ale-temp = Jordan's):** base **64°F** to 50% atten, ramp **+5°F/12h → 69°F**,
+  hold terminal, **72h** cleanup, then cold crash.
+- **Kveik:** hold 90°F to terminal.
+- **COLD CRASH (all presets):** gradual **−6°F/12h**, target **34°F**.
+- Attenuation trigger via `sensor.apparent_attenuation`; terminal via a "flat for N h at/below
+  expected FG" check (stricter than the near-terminal alert).
+- SAFETY: setpoint clamp is **PER-PROGRAM** (a single global 32–80°F would cap kveik, which
+  needs 85–95°F). Each preset carries its own {minF, maxF}: ale/lager `{32, 75}`, kveik
+  `{32, 98}`, cold-crash-only `{32, 45}`, custom = user-set (hard ceiling 100°F). Max single
+  ramp step ±5°F. Pause phase-advance on stale/lost gravity. The clamp is enforced on EVERY
+  write regardless of preset, using that program's bounds.
+
 ## Build order (once approved)
 1. HA: per-tank program helpers + a program-tick automation + the 3 named program definitions
    (setpoint math + phase transitions + safety clamps). 2. Test dry (short intervals) on Tank 1.

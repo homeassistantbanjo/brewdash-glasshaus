@@ -18,6 +18,14 @@ function useOptions(entityId: string): string[] {
   } catch { return []; }
 }
 
+/** Read an entity's attributes object (or null). For the program-status sensor. */
+function useEntityAttrs(entityId: string): Record<string, any> | null {
+  try {
+    const e = useEntity(entityId as EntityName, { returnNullIfNotFound: true });
+    return (e?.attributes as any) ?? null;
+  } catch { return null; }
+}
+
 export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => void }) {
   const a = useBreweryActions();
   const batchOptions = useOptions(`input_select.${tank.id}_batch`);
@@ -36,6 +44,15 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
   const curStatus = cur(`input_select.${tank.id}_status`);
   const curTilt = cur(`input_select.${tank.id}_tilt`);
   const curBatch = cur(`input_select.${tank.id}_batch`);
+
+  // fermentation program: options + current selection + live status (from the
+  // programs container's sensor.tank_N_program_status). Absent until the programs
+  // HA package is installed — the section shows a hint in that case.
+  const programOptions = useOptions(`input_select.${tank.id}_program`);
+  const curProgram = cur(`input_select.${tank.id}_program`);
+  const programStatus = useEntityAttrs(`sensor.${tank.id}_program_status`);
+  const running = !!curProgram && curProgram !== 'None';
+  const awaitingConfirm = programStatus?.awaitingConfirm === true;
 
   return (
     <div style={{
@@ -61,6 +78,46 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
         <Field label="Status">
           <Pills options={statusOptions} active={curStatus}
             onPick={(v) => a.setStatus(tank.id, v)} wrap />
+        </Field>
+
+        <Field label="Fermentation Program">
+          {programOptions.length ? (
+            <>
+              <Pills options={programOptions} active={curProgram}
+                onPick={(v) => (v === 'None' ? a.cancelProgram(tank.id) : a.setProgram(tank.id, v))} wrap />
+              {running && (
+                <div style={{
+                  marginTop: 8, padding: '8px 10px', borderRadius: theme.radius.sm,
+                  background: theme.color.inset, border: `1px solid ${awaitingConfirm ? hexA(theme.color.amber, 0.5) : theme.color.panelBorder}`,
+                }}>
+                  <div style={{ fontFamily: theme.font.mono, fontSize: 12, color: theme.color.text }}>
+                    {programStatus?.status ?? 'starting…'}
+                  </div>
+                  {programStatus?.phase && (
+                    <div style={{ ...hint, marginTop: 2 }}>
+                      phase: {programStatus.phase}
+                      {programStatus.setpointF != null ? ` · target ${programStatus.setpointF}°F` : ''}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                    {awaitingConfirm && (
+                      <button
+                        onClick={() => a.confirmCrash(tank.id)}
+                        style={{ ...actionBtn, color: theme.color.cyan, borderColor: hexA(theme.color.cyan, 0.5) }}>
+                        ❄ Confirm cold crash
+                      </button>
+                    )}
+                    <button onClick={() => a.cancelProgram(tank.id)}
+                      style={{ ...actionBtn, color: theme.color.textDim }}>
+                      Stop program
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <span style={hint}>Programs helper not installed yet (add ha/glasshaus_programs.yaml).</span>
+          )}
         </Field>
 
         <Field label="Batch">

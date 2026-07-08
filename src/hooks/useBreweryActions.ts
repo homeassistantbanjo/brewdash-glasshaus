@@ -60,6 +60,22 @@ export function useBreweryActions() {
       call('input_datetime', 'set_datetime', `input_datetime.${t}_last_cleaned`, { date: iso }, `${label(t)} marked cleaned`),
     setSetpoint: (t: string, tempF: number) =>
       call('number', 'set_value', `number.${t}_setpoint_raw`, { value: Math.round(tempF * 10) }, `${label(t)} setpoint → ${tempF}°F`),
+
+    // --- fermentation programs ---
+    // Start/select a program: set the program helper + reset phase to 0 + stamp start.
+    // The programs container picks it up on its next tick and drives the setpoint.
+    setProgram: async (t: string, program: string) => {
+      await call('input_select', 'select_option', `input_select.${t}_program`, { option: program }, `${label(t)} program → ${program}`);
+      // reset phase state so the program starts from the top
+      await callQuiet('input_number', 'set_value', `input_number.${t}_program_phase`, { value: 0 });
+      await callQuiet('input_datetime', 'set_datetime', `input_datetime.${t}_program_phase_started`, { datetime: new Date().toISOString() });
+    },
+    // Stop/cancel: back to manual (program None). Setpoint stays where it is.
+    cancelProgram: (t: string) =>
+      call('input_select', 'select_option', `input_select.${t}_program`, { option: 'None' }, `${label(t)} program cancelled`),
+    // Confirm the gated cold-crash (the container is awaiting this).
+    confirmCrash: (t: string) =>
+      call('input_button', 'press', `input_button.${t}_confirm_crash`, {}, `${label(t)} — cold crash confirmed`),
   };
 }
 

@@ -1,0 +1,74 @@
+# =============================================================================
+# GlassHaus fermentation PROGRAMS — HA helpers  (Home Assistant PACKAGE)
+# =============================================================================
+# Install: <config>/packages/glasshaus_programs.yaml (packages already enabled).
+# These helpers hold each tank's running-program STATE. The actual control logic
+# (ramps, clamps, gated crash, phase transitions) runs in the `programs` CONTAINER
+# (see programs/ in the repo), which reads/writes these + number.tank_N_setpoint_raw.
+# HA just stores state + the crash-confirm button; the container is the brain.
+#
+# Scoped to 3 tanks. The container's setpoint writes go to number.tank_N_setpoint_raw
+# (×10) with per-program safety clamps — HA does NOT need to clamp.
+# =============================================================================
+
+input_select:
+  tank_1_program: &program_opts
+    name: Tank 1 Program
+    icon: mdi:playlist-play
+    options:
+      - "None"
+      - "Ale — free-rise + D-rest"
+      - "Lager — Brülosophy fast"
+      - "Lager — modern (ale-temp)"
+      - "Kveik — warm & fast"
+      - "Cold crash only"
+      - "Custom"
+  tank_2_program:
+    <<: *program_opts
+    name: Tank 2 Program
+  tank_3_program:
+    <<: *program_opts
+    name: Tank 3 Program
+
+input_number:
+  tank_1_program_phase: &phase_num
+    name: Tank 1 Program Phase
+    icon: mdi:numeric
+    min: 0
+    max: 20
+    step: 1
+    mode: box
+  tank_2_program_phase:
+    <<: *phase_num
+    name: Tank 2 Program Phase
+  tank_3_program_phase:
+    <<: *phase_num
+    name: Tank 3 Program Phase
+
+input_datetime:
+  tank_1_program_phase_started: &phase_started
+    name: Tank 1 Program Phase Started
+    has_date: true
+    has_time: true
+  tank_2_program_phase_started:
+    <<: *phase_started
+    name: Tank 2 Program Phase Started
+  tank_3_program_phase_started:
+    <<: *phase_started
+    name: Tank 3 Program Phase Started
+
+input_button:
+  tank_1_confirm_crash:
+    name: Tank 1 Confirm Cold Crash
+    icon: mdi:snowflake-alert
+  tank_2_confirm_crash:
+    name: Tank 2 Confirm Cold Crash
+    icon: mdi:snowflake-alert
+  tank_3_confirm_crash:
+    name: Tank 3 Confirm Cold Crash
+    icon: mdi:snowflake-alert
+
+# Optional per-batch overrides could be added later (ramp step/interval/target/
+# cleanup hours) as more input_number helpers; the container falls back to the
+# preset defaults when they're absent. Custom-program JSON would live in an
+# input_text.tank_N_program_custom (future — builder UI writes it).
