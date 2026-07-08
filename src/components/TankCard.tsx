@@ -211,9 +211,6 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
               <span style={{ color: theme.color.purple }}>{batch!.tiltColor.toUpperCase()} TILT</span>
             </>
           )}
-          {batch!.joinSource === 'inferred' && (
-            <span style={{ color: theme.color.amber, marginLeft: 8 }}>◆ INFERRED</span>
-          )}
         </div>
       )}
 

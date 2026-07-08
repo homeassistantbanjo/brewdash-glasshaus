@@ -563,14 +563,6 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
   const assignments = TANKS.map(useTankAssignmentInputs);
   const signalLostByColor = useSignalLostByColor();
 
-  // The single unambiguously-fermenting Brewfather batch, if exactly one exists.
-  // Used as an inference fallback when the tank's batch helper isn't populated
-  // yet (the Brewfather→helper auto-sync automation isn't built). We refuse to
-  // infer when >1 batch is fermenting — guessing which tank holds which would
-  // be worse than showing nothing.
-  const fermentingBatches = bfBatches.filter((b) => b.status === 'Fermenting');
-  const soleFermenting = fermentingBatches.length === 1 ? fermentingBatches[0] : null;
-
   // Pure map over already-read values — no hooks in this callback.
   const batches = tanks.map((tank, i) => {
     const { tiltSel, batchSel, expectedFg, assignedAt,
@@ -581,32 +573,17 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
     // helper uses 'None', batch helpers use 'none'; tolerate both.
     const tiltColor = tiltSel && tiltSel.toLowerCase() !== 'none' ? (tiltSel as TiltColor) : null;
 
-    // 1) explicit assignment: match the helper's value to a Brewfather batch
-    const explicit = bfBatches.find(
+    // EXPLICIT ONLY: a tank's batch comes from its assignment helper, matched to a
+    // Brewfather batch. No inference/guessing — with >1 fermenting batch guessing is
+    // useless, and even with one it's better to be explicit. Unassigned → no batch
+    // (card shows "⚠ Batch unassigned — Manage to pick"). Assign via ⚙ Manage.
+    const bf = bfBatches.find(
       (b) => b.name === batchSel || String(b.batchNo) === batchSel,
     ) ?? null;
+    const joinSource: 'assigned' | 'inferred' | 'none' = bf ? 'assigned' : 'none';
 
-    // 2) fallback: an active-brew tank (Fermenting OR Cold Crashing) with no
-    //    explicit batch infers the sole fermenting batch. A cold-crashing tank
-    //    still holds that beer, so it should resolve too.
-    let bf = explicit;
-    let joinSource: 'assigned' | 'inferred' | 'none' = explicit ? 'assigned' : 'none';
-    if (!bf && isActiveBrew(tank.status) && soleFermenting) {
-      bf = soleFermenting;
-      joinSource = 'inferred';
-      console.info(
-        `[GlassHaus] ${tank.id}: batch helper unset — inferring sole fermenting ` +
-        `batch "${soleFermenting.name}" (#${soleFermenting.batchNo}). ` +
-        `Populate ${TANKS[i].batchAssign} to make this explicit.`,
-      );
-    }
-
-    // resolve the Tilt: explicit assignment first, else the batch's own reading
-    // Tilt id (readings[].id, e.g. 'BLACK') so an inferred batch still finds its Tilt.
-    let resolvedColor = tiltColor;
-    if (!resolvedColor && joinSource === 'inferred' && bf?.readingTiltId) {
-      resolvedColor = normalizeTiltId(bf.readingTiltId);
-    }
+    // Tilt comes only from the explicit tilt assignment.
+    const resolvedColor = tiltColor;
     const tilt = resolvedColor ? tilts.find((t) => t.color === resolvedColor) ?? null : null;
 
     const assignment = {
@@ -659,11 +636,6 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
   return { tanks, batches };
 }
 
-/** Map a Brewfather readings[].id (e.g. 'BLACK') back to a TiltColor. */
-function normalizeTiltId(id: string): TiltColor | null {
-  const cap = id.charAt(0).toUpperCase() + id.slice(1).toLowerCase();
-  return (ALL_TILT_COLORS as string[]).includes(cap) ? (cap as TiltColor) : null;
-}
 
 // ---------------------------------------------------------------------------
 // Batch-option sync — keep each tank's batch picker in step with Brewfather
