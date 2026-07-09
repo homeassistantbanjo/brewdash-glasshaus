@@ -1,0 +1,24 @@
+# =============================================================================
+# GlassHaus REST commands  —  Home Assistant PACKAGE
+# =============================================================================
+# Install at <config>/packages/glasshaus_rest.yaml, then restart HA (rest_command
+# is set up at startup). This lets the automations poke the analyzer container
+# WITHOUT hand-editing configuration.yaml — just drop this file in packages/.
+#
+# These target the analyzer container on the Unraid box (192.168.50.118:8091):
+#   glasshaus_insight_trigger → POST /trigger        (rewrite sensor.glasshaus_insight)
+#   glasshaus_plant_refresh   → POST /insights/refresh (warm the in-app Insights view)
+# Used by gh_insight_trigger_on_alert + gh_insight_repopulate_on_start in
+# glasshaus_automations.yaml.
+# =============================================================================
+
+rest_command:
+  glasshaus_insight_trigger:
+    url: "http://192.168.50.118:8091/trigger"
+    method: POST
+    content_type: "application/json"
+    payload: '{"reason": "{{ reason }}"}'
+
+  glasshaus_plant_refresh:
+    url: "http://192.168.50.118:8091/insights/refresh"
+    method: POST
