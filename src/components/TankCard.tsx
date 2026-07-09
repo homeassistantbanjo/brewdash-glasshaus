@@ -1,11 +1,29 @@
 import { useState } from 'react';
 import { Metric } from './Metric';
+import { Sparkline } from './Sparkline';
 import { ConicalFermenter, VesselState } from './ConicalFermenter';
 import { SetpointControl } from './SetpointControl';
 import { MetricDetail, MetricDetailSpec } from './MetricDetail';
 import { EquipmentChip } from './EquipmentStrip';
 import { theme, stateColor, hexA } from '../theme/tokens';
 import { ActiveBatch, AlertSeverity, EquipmentPower, Tank, isActiveBrew } from '../types/domain';
+
+/** A thin uppercase section divider used to group the card's telemetry into
+ *  labeled bands (GRAVITY / TEMPERATURE / SCHEDULE / EQUIPMENT) — legible from
+ *  across the room on the wall display, and the structure the tall layout needs. */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8, marginTop: 4,
+    }}>
+      <span style={{
+        fontFamily: theme.font.sans, fontSize: 9, letterSpacing: 1.5,
+        textTransform: 'uppercase', color: theme.color.textFaint, whiteSpace: 'nowrap',
+      }}>{children}</span>
+      <span style={{ flex: 1, height: 1, background: theme.color.panelBorder }} />
+    </div>
+  );
+}
 
 /**
  * One fermenter as a vertical CARD in the 3-column grid. Fermenting tanks show
@@ -242,19 +260,13 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
 
       {fermenting && (
         <div style={{
-          display: 'flex', flexDirection: 'column', gap: 7, padding: '8px 14px 10px',
-          flex: 1, minHeight: 0,   // fill the card; let the sparkline region absorb slack
+          display: 'flex', flexDirection: 'column', gap: 6, padding: '6px 14px 10px',
+          flex: 1, minHeight: 0,   // fill the card; sparkline regions absorb slack
         }}>
-          {/* Essential telemetry — 2 rows of 4. Trimmed from 12 cells: dropped
-              the standalone Beer·Tilt (now the temp sparkline), the small Setpoint
-              cell (the full-width control below owns setpoint), the noise "Activity"
-              cell (phase on the ring + the pulsing vessel already say "active"), and
-              the 24h range (lives in the Probe detail popup). Temp is now Probe +
-              the Tilt−Probe delta (assignment sanity), not probe-vs-setpoint. */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
-            <Metric value={fmt(batch!.abv, 1)} unit="%" label="ABV" size="sm" />
-            <Metric value={batch!.og ? batch!.og.toFixed(3) : '—'} label="OG" size="sm" />
-            <Metric value={velStr(batch!.gravityVelocityPerDay)} label="SG/day" size="sm"
+          {/* ── GRAVITY ── live SG cluster + the full-ferment gravity curve ─────── */}
+          <SectionLabel>Gravity</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
+            <Metric value={velStr(batch!.gravityVelocityPerDay)} label="SG / day"
               color={velColor(batch!.gravityVelocityPerDay)} glow={active}
               onClick={() => open({
                 label: 'Fermentation velocity', value: velStr(b!.gravityVelocityPerDay), unit: ' SG/day',
@@ -267,9 +279,55 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                   { k: 'ETA to terminal', v: b!.daysToTerminal != null ? b!.daysToTerminal.toFixed(1) + ' d' : '—' },
                 ],
               })} />
-            <Metric
-              value={fgEtaValue(batch!)}
-              label={batch!.projectedFgReach ? 'FG By' : 'ETA'} size="sm"
+            <Metric value={fmt(batch!.attenuation, 0)} unit="%" label="Attenuation"
+              color={theme.color.blue}
+              onClick={() => open({
+                label: 'Apparent attenuation', value: fmt(b!.attenuation, 1), unit: '%', color: theme.color.blue,
+                blurb: 'The yeast-spec figure: % of sugars fermented, (OG−SG)/(OG−1). Distinct from progress-to-FG.',
+                series: sgSeries, seriesLabel: 'Gravity curve', reference: b!.expectedFg ?? null,
+                referenceLabel: 'FG', referenceColor: theme.color.amber,
+                facts: [
+                  { k: 'OG', v: b!.og?.toFixed(3) ?? '—' },
+                  { k: 'ABV so far', v: fmt(b!.abv, 1) + '%' },
+                ],
+              })} />
+            <Metric value={fmt(batch!.abv, 1)} unit="%" label="ABV" />
+          </div>
+          {/* inline gravity curve (full ferment) with the FG reference line */}
+          <div style={{ height: 46, minHeight: 34, flex: '0 1 auto' }}>
+            <Sparkline data={sgSeries} responsive color={theme.color.cyan}
+              reference={batch!.expectedFg ?? null} referenceColor={theme.color.amber}
+              width={260} height={46} ariaLabel="Gravity curve" />
+          </div>
+
+          {/* ── TEMPERATURE ── probe / beer / setpoint on their own line + curve ── */}
+          <SectionLabel>Temperature</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
+            <Metric value={fmt(batch!.probeTemp.value, 1)} unit="°F" label="Probe"
+              color={onProfile ? stateColor('ok') : stateColor('bad')} glow={!onProfile}
+              staleness={batch!.probeTemp.staleness}
+              onClick={() => open(tempSpec('Probe temp (ITC-308)', b!.probeTemp.value, onProfile ? theme.color.green : theme.color.red, b!))} />
+            <Metric value={fmt(batch!.beerTemp.value, 1)} unit="°F" label="Beer (Tilt)"
+              color={theme.color.green} staleness={batch!.beerTemp.staleness}
+              onClick={() => open(tempSpec('Beer temp (Tilt)', b!.beerTemp.value, theme.color.green, b!))} />
+            <Metric value={fmt(batch!.setpoint.value, 1)} unit="°F" label="Setpoint"
+              color={theme.color.amber} />
+            <Metric value={tiltProbeDeltaStr(batch!)} unit="°F" label="Δ T−P"
+              color={tiltProbeDeltaColor(batch!)} glow={tiltProbeSuspect(batch!)}
+              onClick={() => open(tempSpec('Tilt vs Probe', b!.beerTemp.value, theme.color.green, b!))} />
+          </div>
+          {/* inline beer-temp curve with the setpoint reference line */}
+          <div style={{ height: 40, minHeight: 30, flex: '0 1 auto' }}>
+            <Sparkline data={batch!.history.map((r) => r.tempF)} responsive color={theme.color.green}
+              reference={batch!.setpoint.value ?? null} referenceColor={theme.color.amber}
+              width={260} height={40} ariaLabel="Beer temp curve" />
+          </div>
+
+          {/* ── SCHEDULE ── where it is in time + projections ──────────────────── */}
+          <SectionLabel>Schedule</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
+            <Metric value={batch!.daysFermenting?.toFixed(1) ?? '—'} unit="d" label="Day" />
+            <Metric value={fgEtaValue(batch!)} label={batch!.projectedFgReach ? 'FG By' : 'ETA'}
               color={theme.color.cyan}
               onClick={() => open({
                 label: 'Projected finish', value: fgEtaValue(b!), color: theme.color.cyan,
@@ -283,15 +341,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                   { k: 'Expected FG', v: b!.expectedFg?.toFixed(3) ?? '—' },
                 ],
               })} />
-
-            <Metric value={fmt(batch!.probeTemp.value, 1)} unit="°F" label="Probe" size="sm"
-              color={onProfile ? stateColor('ok') : stateColor('bad')} glow={!onProfile}
-              staleness={batch!.probeTemp.staleness}
-              onClick={() => open(tempSpec('Probe temp (ITC-308)', b!.probeTemp.value, onProfile ? theme.color.green : theme.color.red, b!))} />
-            <Metric value={tiltProbeDeltaStr(batch!)} unit="°F" label="Δ Tilt−Probe" size="sm"
-              color={tiltProbeDeltaColor(batch!)} glow={tiltProbeSuspect(batch!)}
-              onClick={() => open(tempSpec('Tilt vs Probe', b!.beerTemp.value, theme.color.green, b!))} />
-            <Metric value={paceValue(batch!.paceVsSchedule)} unit="d" label="Pace" size="sm"
+            <Metric value={paceValue(batch!.paceVsSchedule)} unit="d" label="Pace"
               color={paceColor(batch!.paceVsSchedule)}
               onClick={batch!.paceVsSchedule == null ? undefined : () => open({
                 label: 'Pace vs schedule', value: paceValue(b!.paceVsSchedule), unit: ' days',
@@ -303,40 +353,17 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                 ],
               })} />
             <Metric value={tank.daysSinceCleaned != null ? String(tank.daysSinceCleaned) : '—'} unit="d"
-              label="Clean" size="sm" />
+              label="Since Clean" />
           </div>
 
-          {/* 3rd row — genuinely PER-TANK diagnostics (chiller cycles/runtime are
-              plant-wide → moved to the top strip). 24h temp swing, settling-proof
-              attenuation (gravity drop from 8h peak), Tilt reading freshness, and
-              live CO₂ activity. Dim '—' when the derived package value is absent. */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
-            <Metric value={rangeStrCompact(batch!.beerTemp24h)} unit="°F" label="24h °F" size="sm"
-              onClick={() => open(tempSpec('Beer temp — 24h range', b!.beerTemp.value, theme.color.green, b!))} />
-            <Metric value={batch!.gravityDropFromPeak != null ? batch!.gravityDropFromPeak.toFixed(1) : '—'} unit="pts"
-              label="Drop/Peak" size="sm" color={theme.color.cyan} />
-            <Metric value={ageStr(batch!.tiltGravityAgeMin)}
-              label="Tilt Age" size="sm"
-              color={batch!.tiltGravityAgeMin != null && batch!.tiltGravityAgeMin > 15 ? stateColor('warn') : theme.color.textDim} />
-            <Metric value={noiseStr(batch!.gravityNoise)} label="Activity" size="sm"
-              color={active ? stateColor('ok') : theme.color.textDim} glow={active} />
-          </div>
-
-          {/* setpoint control — the one write action on the card face, and the
-              single home for the setpoint number (no redundant setpoint cell). */}
+          {/* ── EQUIPMENT ── this tank's controller power/energy + setpoint write ─ */}
+          <SectionLabel>Equipment</SectionLabel>
+          {controllerPower && <EquipmentChip eq={controllerPower} />}
           {tank.hasController && (
             <SetpointControl tankId={tank.id} current={batch!.setpoint.value} />
           )}
 
-          {/* this tank's OWN temp-controller power — cooling(pump)/heating/idle
-              from wattage, with today/lifetime kWh. Lives here, not in the top
-              strip, so it scales to N tanks without crowding. */}
-          {controllerPower && <EquipmentChip eq={controllerPower} />}
-
-          {/* Trends are NOT drawn inline here — they crunched when alert rows
-              appeared. Tap any metric for its full-ferment chart (MetricDetail),
-              or open the dedicated Graphs view. This spacer just absorbs slack so
-              the fixed content sits at the top and the card never overflows. */}
+          {/* absorbs any remaining slack so sections sit top-aligned, never overflow */}
           <div style={{ flex: 1, minHeight: 0 }} />
         </div>
       )}

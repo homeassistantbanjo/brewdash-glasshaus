@@ -197,6 +197,12 @@ DATA LITERACY — critical, do not get these wrong:
   74% attenuation but 95% of the way to target FG).
 - gravity24hDelta_pts is in POINTS/day (×1000 SG); e.g. -10 = -0.010 SG/day. Near terminal a
   small negative or ~0 delta is EXPECTED and fine, not a problem.
+- CRITICAL — do NOT report a "broken pipeline" / "computation failure" / "null metrics". A
+  delta of 0 (or ~0) on a beer that is AT/NEAR terminal (progressToFgPct high, gravity ≈ expected
+  FG) is the beer being DONE, not a broken sensor. Only if apparentAttenuationPct AND
+  progressToFgPct are BOTH null while a live gravity + OG exist should you note a data gap — and
+  even then say "metrics not yet computed / verify the analyzer", never "pipeline broken". You
+  are given the already-computed values; if they are present, the pipeline is fine.
 
 PACKAGING READINESS — do NOT get this wrong (common bad advice):
 - Reaching terminal gravity does NOT mean "ready to package." Terminal is just the FIRST step.

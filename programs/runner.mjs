@@ -172,15 +172,31 @@ function tiltData(by, tiltColor) {
     tempF: tp && tp.state !== 'unavailable' ? Number(tp.state) : null, ageMin };
 }
 
+// push a gravity sample into the tank's rolling window (kept 24h) and return the
+// 8h MAX (settling-proof peak for the drop-from-peak metric).
 function roll8hMax(tankId, sg) {
   if (sg == null) return null;
   const now = Date.now();
   const buf = gravWindow.get(tankId) || [];
   buf.push({ t: now, sg });
-  const cutoff = now - 8 * 3600_000;
+  const cutoff = now - 24 * 3600_000;                    // keep 24h so we can also slope it
   const kept = buf.filter((x) => x.t >= cutoff);
   gravWindow.set(tankId, kept);
-  return Math.max(...kept.map((x) => x.sg));
+  const last8h = kept.filter((x) => x.t >= now - 8 * 3600_000);
+  return Math.max(...last8h.map((x) => x.sg));
+}
+
+// Self-computed 24h gravity slope in POINTS/day from the runner's own window —
+// a fallback for when the HA statistics sensor is missing/stale (e.g. reads a
+// truncated -0.0, or the per-color stat entity doesn't exist). Needs samples
+// spanning enough time to be meaningful; returns null until the window fills.
+function windowSlopePts(tankId) {
+  const buf = gravWindow.get(tankId) || [];
+  if (buf.length < 2) return null;
+  const first = buf[0], last = buf[buf.length - 1];
+  const days = (last.t - first.t) / 86_400_000;
+  if (days < 0.25) return null;                          // <6h of data → not trustworthy yet
+  return ((last.sg - first.sg) / days) * 1000;           // SG/day → pts/day
 }
 
 async function deriveTank(tankId, by) {
@@ -197,13 +213,23 @@ async function deriveTank(tankId, by) {
   const og = batch?.measuredOg != null ? Number(batch.measuredOg) : null;
   const fermentingStartMs = batch?.fermentingStart ? Date.parse(batch.fermentingStart) : null;
 
-  // 24h delta: prefer the per-color Tilt stat if present, else the Black legacy one
-  const c = tiltSel?.toLowerCase();
-  const delta = num(s(`sensor.tilt_${c}_gravity_24h_stat`)) != null
-    ? num(s(`sensor.tilt_${c}_gravity_24h_stat`)) * 1000  // stat is SG → pts
-    : num(s('sensor.gravity_24h_delta'));                 // legacy pts (Black)
+  const gravity8hMaxSg = roll8hMax(tankId, gravity); // (also fills the 24h window)
 
-  const gravity8hMaxSg = roll8hMax(tankId, gravity);
+  // 24h delta (pts/day), most-trustworthy source first:
+  //  1) per-color Tilt stat sensor if it exists (sensor.tilt_<color>_gravity_24h_stat)
+  //  2) the legacy un-prefixed Black stat / delta sensors (older HA setups)
+  //  3) the runner's OWN window slope — robust to a missing/truncated HA stat
+  //     (that "-0.0" bug where the statistics sensor rounds a slow drop to zero).
+  const c = tiltSel?.toLowerCase();
+  const statPerColor = num(s(`sensor.tilt_${c}_gravity_24h_stat`));   // SG/day
+  const statLegacy = num(s('sensor.tilt_gravity_24h_stat'));          // SG/day (un-prefixed Black)
+  const deltaLegacy = num(s('sensor.gravity_24h_delta'));             // already pts/day
+  const own = windowSlopePts(tankId);                                 // pts/day, self-computed
+  let delta;
+  if (statPerColor != null && statPerColor !== 0) delta = statPerColor * 1000;
+  else if (statLegacy != null && statLegacy !== 0) delta = statLegacy * 1000;
+  else if (deltaLegacy != null && deltaLegacy !== 0) delta = deltaLegacy;
+  else delta = own;  // HA stats are 0/absent (e.g. truncated) → trust our own slope
 
   // latch state, reset when the batch changes
   const batchKey = batchSel || 'none';
