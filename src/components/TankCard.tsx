@@ -12,23 +12,35 @@ import { BarGauge, TickReadout } from './hud/Gauge';
 import { theme, stateColor, hexA, textGlow, fx } from '../theme/tokens';
 import { ActiveBatch, AlertSeverity, EquipmentPower, Tank, isActiveBrew } from '../types/domain';
 
-/** A vitals pip that sits in a corner of the hero ring "collar" — a tiny glowing
- *  value+label the eye picks up radially without leaving the gauge. */
-function CollarPip({ pos, label, value, color, glow }: {
-  pos: 'tl' | 'tr' | 'br' | 'bl'; label: string; value: string; color: string; glow?: boolean;
+/** A vitals pip at a corner of the hero ring "collar": a LEADING label so it's
+ *  unambiguous (e.g. "DAY 6.4d"), glowing value, positioned clear of the ring. */
+function CollarPip({ pos, label, value, unit, color, glow }: {
+  pos: 'tl' | 'tr' | 'br' | 'bl'; label: string; value: string; unit?: string; color: string; glow?: boolean;
 }) {
   const corner: React.CSSProperties =
-    pos === 'tl' ? { top: 2, left: 0, textAlign: 'left', alignItems: 'flex-start' }
-    : pos === 'tr' ? { top: 2, right: 0, textAlign: 'right', alignItems: 'flex-end' }
-    : pos === 'br' ? { bottom: 24, right: 0, textAlign: 'right', alignItems: 'flex-end' }
-    : { bottom: 24, left: 0, textAlign: 'left', alignItems: 'flex-start' };
+    pos === 'tl' ? { top: -2, left: -6, textAlign: 'left', alignItems: 'flex-start' }
+    : pos === 'tr' ? { top: -2, right: -6, textAlign: 'right', alignItems: 'flex-end' }
+    : pos === 'br' ? { bottom: 6, right: -6, textAlign: 'right', alignItems: 'flex-end' }
+    : { bottom: 6, left: -6, textAlign: 'left', alignItems: 'flex-start' };
   return (
     <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', gap: 1, ...corner }}>
+      <span style={{ fontFamily: theme.font.sans, fontSize: 8.5, letterSpacing: 1.5, fontWeight: 700, textTransform: 'uppercase', color: theme.color.textLabel }}>{label}</span>
       <span style={{
-        fontFamily: theme.font.mono, fontSize: 14, fontWeight: 600, lineHeight: 1, color,
+        fontFamily: theme.font.mono, fontSize: 15, fontWeight: 600, lineHeight: 1, color,
         fontVariantNumeric: 'tabular-nums', textShadow: glow ? textGlow(color, 0.7) : `0 0 6px ${hexA(color, 0.4)}`,
-      }}>{value}</span>
-      <span style={{ fontFamily: theme.font.sans, fontSize: 8, letterSpacing: 1.5, textTransform: 'uppercase', color: theme.color.textFaint }}>{label}</span>
+      }}>{value}{unit && <span style={{ fontSize: 9, color: theme.color.textDim }}>{unit}</span>}</span>
+    </div>
+  );
+}
+
+/** Ring legend chip — a colored dot + name + value, so you know which concentric
+ *  ring is which. Dot color === that ring's arc color. */
+function RingKey({ color, label, value }: { color: string; label: string; value: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, boxShadow: `0 0 6px ${color}`, flexShrink: 0 }} />
+      <span style={{ fontFamily: theme.font.sans, fontSize: 9, letterSpacing: 1, textTransform: 'uppercase', color: theme.color.textLabel }}>{label}</span>
+      <span style={{ fontFamily: theme.font.mono, fontSize: 11, fontWeight: 600, color, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
     </div>
   );
 }
@@ -187,19 +199,28 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                 ],
                 source: `Tilt ${b!.tiltColor ?? '?'} · sensor.tilt_${(b!.tiltColor ?? '').toLowerCase()}_gravity`,
               })} />
-            {/* HERO INSTRUMENT CLUSTER — dual concentric rings (outer = attenuation
-                progress, inner = temperature-in-band) wrapping the vessel, plus a
-                collar of vitals pips (DAY / VEL / ETA) arranged around it. This is
-                the glance-from-across-the-room gauge. */}
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 216, height: 224 }}>
-              <ProgressRing pct={batch!.attenuationProgress ?? null} size={224} color={accent} active={active}
-                innerPct={tempInBandPct(batch!)} innerColor={onProfile ? theme.color.green : theme.color.amber} />
-              <ConicalFermenter state={vessel} fillPct={batch!.attenuationProgress ?? null}
-                active={active} width={104} height={164} />
-              {/* collar pips around the ring */}
-              <CollarPip pos="tl" label="DAY" value={batch!.daysFermenting?.toFixed(1) ?? '—'} color={theme.color.textLabel} />
-              <CollarPip pos="tr" label="VEL" value={velStr(batch!.gravityVelocityPerDay)} color={velColor(batch!.gravityVelocityPerDay)} glow={active} />
-              <CollarPip pos="br" label="ETA" value={fgEtaValue(batch!)} color={theme.color.cyan} />
+            {/* HERO INSTRUMENT CLUSTER — dual concentric rings wrapping the vessel:
+                OUTER = attenuation progress (blue, matches the ATTENUATION gauge
+                below), INNER = temperature-in-band (green on-profile / amber off).
+                A legend under the vessel names each ring; a collar of labeled vitals
+                pips (DAY / VEL / ETA) sits at the corners. */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 216, height: 210 }}>
+                <ProgressRing pct={batch!.attenuationProgress ?? null} size={210} color={theme.color.blue} active={active}
+                  innerPct={tempInBandPct(batch!)} innerColor={onProfile ? theme.color.green : theme.color.amber} />
+                <ConicalFermenter state={vessel} fillPct={batch!.attenuationProgress ?? null}
+                  active={active} width={100} height={158} />
+                {/* labeled collar pips at the ring corners */}
+                <CollarPip pos="tl" label="DAY" value={batch!.daysFermenting?.toFixed(1) ?? '—'} unit="d" color={theme.color.textLabel} />
+                <CollarPip pos="tr" label="VEL" value={velStr(batch!.gravityVelocityPerDay)} color={velColor(batch!.gravityVelocityPerDay)} glow={active} />
+                <CollarPip pos="br" label="ETA" value={fgEtaValue(batch!)} color={theme.color.cyan} />
+              </div>
+              {/* ring legend — tells you which ring is which */}
+              <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+                <RingKey color={theme.color.blue} label="ATTEN" value={`${pct(batch!.attenuationProgress)}%`} />
+                <RingKey color={onProfile ? theme.color.green : theme.color.amber} label="TEMP"
+                  value={onProfile ? 'IN BAND' : `${(dev >= 0 ? '+' : '')}${dev.toFixed(1)}°`} />
+              </div>
             </div>
             {/* right headline: attenuation progress */}
             <HeadlineStat align="left"
@@ -219,25 +240,40 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
               })} />
           </>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '16px 0' }}>
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 200, height: 200 }}>
-              {/* dim idle ring behind the empty vessel — reads as "system standby",
-                  not dead space (HUD themes only; no-op elsewhere) */}
-              <ProgressRing pct={null} size={200} color={accent} active={false} />
-              <ConicalFermenter state={vessel} width={110} height={172} />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '22px 0 8px' }}>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 210, height: 210 }}>
+              {/* idle ring: a slow-scanning reticle (via active flag on an idle-tint
+                  ring) so an empty tank still reads as a LIVE instrument on standby */}
+              <ProgressRing pct={null} size={210} color={accent} active />
+              <ConicalFermenter state={vessel} width={104} height={164} />
+              {/* center status glyph over the vessel */}
+              <div style={{
+                position: 'absolute', fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 2,
+                fontWeight: 700, color: hexA(accent, 0.8), textShadow: `0 0 8px ${hexA(accent, 0.5)}`,
+                bottom: 34,
+              }}>{tank.status === 'Dirty' ? 'CLEAN' : 'EMPTY'}</div>
             </div>
-            {/* STANDBY chip — glowing status pill instead of bare text */}
+            {/* STANDBY status readout — glowing chamfered chip */}
             <div style={{
-              fontFamily: theme.font.mono, fontSize: 11, letterSpacing: 2, fontWeight: 700,
-              textTransform: 'uppercase', color: accent, textShadow: textGlow(accent, 0.7),
-              padding: '3px 12px', borderRadius: theme.radius.sm,
-              border: `1px solid ${hexA(accent, 0.4)}`, background: hexA(accent, 0.06),
+              fontFamily: theme.font.mono, fontSize: 12, letterSpacing: 2, fontWeight: 700,
+              textTransform: 'uppercase', color: accent, textShadow: textGlow(accent, 0.8),
+              padding: '5px 16px',
+              clipPath: fx().brackets ? 'polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px)' : undefined,
+              borderRadius: fx().brackets ? 0 : theme.radius.sm,
+              border: `1px solid ${hexA(accent, 0.5)}`, background: hexA(accent, 0.08),
             }}>
-              {tank.status === 'Dirty' ? '● NEEDS CLEANING'
-                : isActiveBrew(tank.status) ? '● AWAITING ASSIGNMENT'
-                : '● STANDBY'}
+              {tank.status === 'Dirty' ? '◈ NEEDS CLEANING'
+                : isActiveBrew(tank.status) ? '◈ AWAITING ASSIGNMENT'
+                : '◈ STANDBY · READY'}
             </div>
-            <div style={{ fontFamily: theme.font.sans, fontSize: 12.5, color: theme.color.textDim, textAlign: 'center', padding: '0 12px' }}>
+            {/* even idle, show LIVE diagnostics so the card carries real data */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5, width: '100%', padding: '0 14px' }}>
+              <TickReadout value={tank.probeTemp?.value != null ? tank.probeTemp.value.toFixed(1) : '—'} unit="°F" label="Probe" color={theme.color.textLabel} />
+              <TickReadout value={tank.setpoint?.value != null ? tank.setpoint.value.toFixed(1) : '—'} unit="°F" label="Setpoint" color={theme.color.amber} />
+              <TickReadout value={tank.daysSinceCleaned != null ? String(tank.daysSinceCleaned) : '—'} unit="d" label="Since Clean"
+                color={tank.status === 'Dirty' ? stateColor('warn') : theme.color.textLabel} />
+            </div>
+            <div style={{ fontFamily: theme.font.sans, fontSize: 12, color: theme.color.textDim, textAlign: 'center', padding: '2px 14px 0' }}>
               {!tank.hasController ? 'No controller wired'
                 : isActiveBrew(tank.status)
                   ? '⚙ Manage to pick which beer is in this tank'
