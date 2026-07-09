@@ -15,6 +15,7 @@
 interface GlassHausConfig {
   haUrl?: string;
   haToken?: string;
+  analyzerUrl?: string;
 }
 
 declare global {
@@ -30,3 +31,8 @@ export const HA_URL =
 
 export const HA_TOKEN =
   runtime.haToken || import.meta.env.VITE_HA_TOKEN || '';
+
+// The analyzer container's HTTP API (full-plant Insights view). Same host as the
+// dashboard is served from, port 8091, unless overridden at runtime/build time.
+export const ANALYZER_URL =
+  runtime.analyzerUrl || import.meta.env.VITE_ANALYZER_URL || 'http://192.168.50.118:8091';

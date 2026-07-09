@@ -5,6 +5,7 @@ import { Metric } from './Metric';
 import { EquipmentStrip } from './EquipmentStrip';
 import { AlertBar } from './AlertBar';
 import { GraphsView } from './GraphsView';
+import { InsightsView } from './InsightsView';
 import { InsightPanel } from './InsightPanel';
 import { theme, stateColor, hexA } from '../theme/tokens';
 import { useActiveBatches, useGlycol, useEquipment, useSyncBatchOptions, usePlantDiag, useInsight } from '../hooks/useBrewery';
@@ -20,7 +21,7 @@ export function Overview() {
   // keep each tank's batch picker options in sync with Brewfather's live
   // Fermenting set (adds new batches, prunes departed ones → marks tank Dirty)
   useSyncBatchOptions();
-  const [view, setView] = useState<'tanks' | 'graphs'>('tanks');
+  const [view, setView] = useState<'tanks' | 'graphs' | 'insights'>('tanks');
   const [editing, setEditing] = useState<Tank | null>(null);
   // tank id the alert bar asked to highlight (pulses that card briefly)
   const [focusTankId, setFocusTankId] = useState<string | null>(null);
@@ -101,7 +102,7 @@ export function Overview() {
           <InsightPanel insight={insight} />
           {/* view toggle: tank cards ↔ dedicated big-charts view */}
           <div style={{ display: 'flex', gap: 4 }}>
-            {(['tanks', 'graphs'] as const).map((v) => (
+            {(['tanks', 'graphs', 'insights'] as const).map((v) => (
               <button key={v} onClick={() => setView(v)} style={{
                 fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 1,
                 textTransform: 'uppercase', padding: '4px 10px', borderRadius: 6,
@@ -109,7 +110,7 @@ export function Overview() {
                 border: `1px solid ${view === v ? theme.color.cyan : theme.color.panelBorder}`,
                 background: view === v ? hexA(theme.color.cyan, 0.15) : theme.color.inset,
                 color: view === v ? theme.color.cyan : theme.color.textDim,
-              }}>{v === 'tanks' ? 'Tanks' : 'Graphs'}</button>
+              }}>{v === 'tanks' ? 'Tanks' : v === 'graphs' ? 'Graphs' : 'Insights'}</button>
             ))}
           </div>
           <div style={{ fontFamily: theme.font.mono, fontSize: 11, color: theme.color.textDim }}>
@@ -178,6 +179,8 @@ export function Overview() {
 
       {view === 'graphs' ? (
         <GraphsView />
+      ) : view === 'insights' ? (
+        <InsightsView />
       ) : (
         /* 3-column card grid — one fermenter per column, stable order, fills the
            remaining vertical space. Single-screen: this flex-1 region is the only

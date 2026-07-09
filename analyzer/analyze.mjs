@@ -103,6 +103,68 @@ async function gather(trigger) {
   return { trigger, subject, activeTanks, tankCount: all.length };
 }
 
+// ---- equipment health: RULE-BASED facts + flags (deterministic, no LLM) --------
+// The LLM only INTERPRETS these; the numbers/flags themselves are computed here so
+// they can't be hallucinated. Mirrors the plant-diag signals the app already shows.
+function gatherEquipment(by) {
+  const s = (id) => by[id]?.state;
+  const n = (id) => num(s(id));
+  const ageMin = (id) => {
+    const lu = by[id]?.last_updated;
+    return lu ? Math.round((Date.now() - Date.parse(lu)) / 60000) : null;
+  };
+
+  // glycol chiller — wattage is the truth (the switch lies). Short-cycling = many
+  // compressor starts per hour; runtime from history_stats if present.
+  const glycolW = n('sensor.glycol_power_current_consumption');
+  const cyclesPerH = n('sensor.glycol_compressor_cycles_1h');
+  const runtime1hMin = n('sensor.glycol_compressor_on_1h'); // hours → treat as-is
+  const glycol = {
+    reservoirTempF: n('sensor.glycol_temp') ?? n('sensor.glycol_chiller_temp_temperature'),
+    powerW: glycolW,
+    running: glycolW != null ? glycolW > 200 : null,
+    cyclesPerHour: cyclesPerH,
+    shortCycling: cyclesPerH != null ? cyclesPerH >= 6 : null, // ≥6 starts/h = short-cycling
+    runtimeHrs7d: n('sensor.tank_1_cooling_runtime_7d'),
+  };
+
+  const kegW = n('sensor.kegerator_power_current_consumption');
+  const kegerator = {
+    powerW: kegW,
+    cooling: kegW != null ? kegW > 10 : null,
+    todayKwh: n('sensor.kegerator_today_s_consumption'),
+  };
+
+  // per-tank controller wattage + Tilt signal age (only meaningful where present)
+  const controllers = TANKS.map((t) => {
+    const w = n(`sensor.${t}_temp_controller_power_current_consumption`);
+    const tiltSel = s(`input_select.${t}_tilt`);
+    const c = tiltSel && tiltSel.toLowerCase() !== 'none' ? tiltSel.toLowerCase() : null;
+    return {
+      tank: t,
+      controllerW: w,
+      probeTempF: n(`sensor.${t}_probe_temp`),
+      setpointF: n(`sensor.${t}_setpoint`),
+      tiltSignalAgeMin: c ? ageMin(`sensor.tilt_${c}_gravity`) : null,
+      tiltSignalLost: c ? (ageMin(`sensor.tilt_${c}_gravity`) ?? 0) > 15 : null,
+    };
+  }).filter((ctrl) => ctrl.controllerW != null || ctrl.probeTempF != null);
+
+  return { glycol, kegerator, controllers };
+}
+
+// ---- FULL PLANT analysis: one Claude call → structured multi-section result ------
+// { generatedAt, plantSummary:{severity,headline,detail,action},
+//   tanks:[{tank,batch,severity,headline,detail,action}], equipment:{severity,headline,detail,action} }
+async function gatherPlant(trigger) {
+  const states = await haGet('/api/states');
+  const by = Object.fromEntries(states.map((e) => [e.entity_id, e]));
+  const all = TANKS.map((t) => gatherTank(by, t));
+  const activeTanks = all.filter((t) => t.active);
+  const equipment = gatherEquipment(by);
+  return { trigger, activeTanks, equipment, tankCount: all.length };
+}
+
 const SYSTEM = `You are an expert brewer analyzing live fermentation telemetry from a homebrewery.
 Be concise, specific, and ACTIONABLE. Flag only what genuinely matters; if all is well, say so plainly.
 
@@ -211,4 +273,109 @@ export async function runOnce(trigger = 'digest') {
   await writeInsight(insight, data.subject);
   console.log(`[analyzer] ${trigger} → ${data.subject.tank}: ${insight.severity}: ${insight.headline}`);
   return insight;
+}
+
+// =============================================================================
+// FULL-PLANT structured analysis (for the in-app Insights view). ONE Claude call
+// returns a plant summary + a per-tank section for every active tank + an
+// equipment-health section. Equipment facts are computed in code (gatherEquipment)
+// and only INTERPRETED by the model — it must not invent numbers.
+// =============================================================================
+const SYSTEM_PLANT = `You are an expert brewer + equipment tech producing a full status readout for a
+homebrewery dashboard. Return a plant summary, one section PER active tank, and one equipment
+section. Be concise, specific, ACTIONABLE. All the same DATA-LITERACY and PACKAGING-READINESS
+rules apply (Tilt noise ±0.002 is not a trend; apparentAttenuationPct is TRUE attenuation while
+progressToFgPct is % to target FG — never conflate; terminal needs 3 stable days; ferment→D-rest
+→crash→condition→package, never skip to packaging; null OG = log measured OG in Brewfather).
+
+PER TANK: name the tank + batch. Say where it is in the arc and the NEXT step. If OG/gravity is
+missing say what to log; don't analyze empty telemetry.
+
+EQUIPMENT: interpret the PROVIDED facts only — do NOT invent numbers. Flag: glycol short-cycling
+(shortCycling=true → compressor starting too often, hard on it — check reservoir/thermostat),
+controller running far off setpoint (probe vs setpoint), a Tilt whose signal is lost
+(tiltSignalLost), or a kegerator/chiller drawing abnormal power. If everything's within range,
+say so plainly.
+
+SEVERITY per section: info (nominal) | watch (keep an eye) | problem (act now). Only go above
+info for something a brewer would actually act on.
+
+Output ONLY valid JSON (no markdown, no code fences), EXACTLY this shape:
+{"plantSummary":{"severity":"info|watch|problem","headline":"<=70 chars","detail":"1-2 sentences","action":"or empty"},
+ "tanks":[{"tank":"tank_1","batch":"name or null","severity":"...","headline":"...","detail":"...","action":"..."}],
+ "equipment":{"severity":"...","headline":"...","detail":"1-3 sentences","action":"..."}}`;
+
+async function callClaudePlant(data) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: MODEL, max_tokens: 1200, system: SYSTEM_PLANT,
+      messages: [{ role: 'user', content:
+        `Trigger: ${data.trigger}\n` +
+        `ACTIVE TANKS (analyze each; if empty, note no active brews):\n${JSON.stringify(data.activeTanks, null, 1)}\n\n` +
+        `EQUIPMENT FACTS (interpret only, do not invent numbers):\n${JSON.stringify(data.equipment, null, 1)}` }],
+    }),
+  });
+  const j = await res.json();
+  if (j.error) throw new Error(`${j.error.type}: ${j.error.message}`);
+  const text = stripFences(j.content?.[0]?.text ?? '');
+  try { return JSON.parse(text); }
+  catch {
+    return {
+      plantSummary: { severity: 'info', headline: 'Analysis (unparsed)', detail: text.slice(0, 300), action: '' },
+      tanks: [], equipment: { severity: 'info', headline: '', detail: '', action: '' },
+    };
+  }
+}
+
+// Cache the last full-plant result so opening the view is instant; refresh re-runs.
+let lastPlant = null;
+
+export function getCachedPlant() { return lastPlant; }
+
+export async function runPlant(trigger = 'view') {
+  const data = await gatherPlant(trigger);
+  let analysis;
+  if (data.activeTanks.length === 0) {
+    // no active brew → skip the LLM, still report equipment (cheap, code-side flags)
+    analysis = {
+      plantSummary: { severity: 'info', headline: 'No active fermentations', detail: 'No tank has a batch assigned and fermenting.', action: '' },
+      tanks: [],
+      equipment: await equipmentOnly(data.equipment),
+    };
+  } else {
+    analysis = await callClaudePlant(data);
+  }
+  lastPlant = {
+    generatedAt: new Date().toISOString(),
+    trigger,
+    ...analysis,
+    // include the raw equipment facts so the UI can show hard numbers alongside prose
+    equipmentFacts: data.equipment,
+  };
+  const secs = [analysis.plantSummary?.severity, ...(analysis.tanks || []).map((t) => t.severity), analysis.equipment?.severity];
+  console.log(`[analyzer] ${trigger} plant → tanks=${(analysis.tanks || []).length} severities=${secs.join(',')}`);
+  return lastPlant;
+}
+
+// equipment-only interpretation (used when there are no active tanks) — one small call
+async function equipmentOnly(equipment) {
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: MODEL, max_tokens: 300, system: SYSTEM_PLANT,
+        messages: [{ role: 'user', content:
+          `No active tanks. Return ONLY the "equipment" object of the schema for these facts:\n${JSON.stringify(equipment, null, 1)}` }],
+      }),
+    });
+    const j = await res.json();
+    if (j.error) throw new Error(j.error.message);
+    const parsed = JSON.parse(stripFences(j.content?.[0]?.text ?? '{}'));
+    return parsed.equipment || parsed;
+  } catch {
+    return { severity: 'info', headline: 'Equipment', detail: 'No interpretation available.', action: '' };
+  }
 }
