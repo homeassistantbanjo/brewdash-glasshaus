@@ -58,6 +58,34 @@ r = computeDerived({ gravity:null, og:null, expectedFg:1.010, beerTempF:null, pr
   setpointF:66, gravity24hDeltaPts:null, gravity8hMaxSg:null, gravityAgeMin:null }, NOW);
 ok('batchless tank still reports temp excursion', r.alerts.some(a=>a.key==='temp_excursion'));
 
+// STABILITY: flat + near FG, stable for 4 days → terminalConfirmed (3d bar)
+r = computeDerived({ gravity:1.011, og:1.050, expectedFg:1.010, beerTempF:67, probeTempF:67,
+  setpointF:67, gravity24hDeltaPts:-0.3, gravity8hMaxSg:1.012, gravityAgeMin:1,
+  stableSinceMs: NOW - 4*86400000 }, NOW);
+ok('isStableNow (flat + near FG)', r.isStableNow===true);
+ok('stableDays ≈ 4', r.stableDays===4);
+ok('terminalConfirmed at 4d (≥3d bar)', r.terminalConfirmed===true);
+ok('terminal-confirmed milestone fires', r.alerts.some(a=>a.key==='terminal_confirmed'));
+
+// stable only 1 day → NOT confirmed yet (still near-terminal milestone)
+r = computeDerived({ gravity:1.011, og:1.050, expectedFg:1.010, beerTempF:67, probeTempF:67,
+  setpointF:67, gravity24hDeltaPts:-0.3, gravity8hMaxSg:1.012, gravityAgeMin:1,
+  stableSinceMs: NOW - 1*86400000 }, NOW);
+ok('stableDays ≈ 1', r.stableDays===1);
+ok('NOT terminalConfirmed at 1d', r.terminalConfirmed===false);
+ok('falls back to near-terminal milestone', r.alerts.some(a=>a.key==='approaching_terminal'));
+
+// dry-hopped needs 6d: 4 days stable → NOT confirmed
+r = computeDerived({ gravity:1.011, og:1.050, expectedFg:1.010, beerTempF:67, probeTempF:67,
+  setpointF:67, gravity24hDeltaPts:-0.3, gravity8hMaxSg:1.012, gravityAgeMin:1,
+  stableSinceMs: NOW - 4*86400000, dryHopped:true }, NOW);
+ok('dry-hopped: 4d NOT enough (needs 6)', r.terminalConfirmed===false && r.requiredStableDays===6);
+
+// still dropping → not stable at all
+r = computeDerived({ gravity:1.020, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:-8, gravity8hMaxSg:1.025, gravityAgeMin:0, stableSinceMs:null }, NOW);
+ok('not stable while attenuating', r.isStableNow===false && r.stableDays===null);
+
 // pace: 75% to FG at day 3 of a 7-day plan → ahead of schedule (positive)
 r = computeDerived({ gravity:1.020, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
   setpointF:66, gravity24hDeltaPts:-8, gravity8hMaxSg:1.025, gravityAgeMin:0,

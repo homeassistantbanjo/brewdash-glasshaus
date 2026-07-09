@@ -231,11 +231,17 @@ async function deriveTank(tankId, by) {
   else if (deltaLegacy != null && deltaLegacy !== 0) delta = deltaLegacy;
   else delta = own;  // HA stats are 0/absent (e.g. truncated) → trust our own slope
 
-  // latch state, reset when the batch changes
+  // per-tank persisted state, reset when the batch changes: the fermentation
+  // latch + the gravity-stability start timestamp.
   const batchKey = batchSel || 'none';
   const prev = latchState.get(tankId);
-  if (!prev || prev.batchKey !== batchKey) latchState.set(tankId, { batchKey, latched: false });
-  const prevLatched = latchState.get(tankId).latched;
+  if (!prev || prev.batchKey !== batchKey) latchState.set(tankId, { batchKey, latched: false, stableSinceMs: null });
+  const st = latchState.get(tankId);
+  const prevLatched = st.latched;
+
+  // is this batch dry-hopped? (raises the stable-days bar to 6d for hop creep)
+  const dryHopped = /(?:dry\s*hop|neipa|hazy|ipa|pale)/i.test(batchSel || '') ||
+    /(?:dry\s*hop|neipa|hazy)/i.test(batch?.recipe?.style?.name || '');
 
   const d = computeDerived({
     gravity, og,
@@ -248,10 +254,16 @@ async function deriveTank(tankId, by) {
     gravityAgeMin: ageMin,
     daysFermenting: fermentingStartMs ? (Date.now() - fermentingStartMs) / 86_400_000 : null,
     prevLatched,
+    stableSinceMs: st.stableSinceMs,
+    dryHopped,
   }, Date.now());
 
   // persist the latch (one-shot until batch changes)
-  if (d.fermentationStarted) latchState.get(tankId).latched = true;
+  if (d.fermentationStarted) st.latched = true;
+  // maintain the stability clock: start it when gravity first goes stable, clear
+  // it the moment it stops being stable (so stableDays resets on any real move).
+  if (d.isStableNow) { if (st.stableSinceMs == null) st.stableSinceMs = Date.now(); }
+  else st.stableSinceMs = null;
 
   // write ONE generic per-tank entity the app + notifications read
   await fetch(`${HA_URL}/api/states/sensor.${tankId}_derived`, {

@@ -87,6 +87,7 @@ export function Overview() {
             the logo lettering) with a holographic gradient echoing the skull art.
             Centered between the wordmark and the status readout. */}
         <div style={{
+          display: 'inline-block',   // required for background-clip:text to clip to the glyphs
           fontFamily: "'Anton', 'JetBrains Mono', sans-serif",
           fontSize: 27, letterSpacing: 4, lineHeight: 1,
           textTransform: 'uppercase', whiteSpace: 'nowrap',

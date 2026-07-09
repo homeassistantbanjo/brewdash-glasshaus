@@ -87,6 +87,21 @@ export function computeDerived(t, now = 0) {
     ? round(t.beerTempF - t.probeTempF, 1) : null;
   const gravityAgeMin = n(t.gravityAgeMin);
 
+  // --- gravity STABILITY: how long has gravity held terminal? -----------------
+  // "stable" = within NEAR_TERMINAL_SG of expected FG AND flat (|24h delta| < 1pt).
+  // The runner persists `stableSinceMs` (the epoch it FIRST became stable this run,
+  // reset whenever it stops being stable); here we just turn that into days +
+  // a readiness flag. Confirmed-terminal threshold is 3 days (5–7 if dry-hopped,
+  // for hop creep). isStableNow is what the runner uses to maintain the timestamp.
+  const nearFg = (gravity != null && fg != null) && (gravity - fg) <= NEAR_TERMINAL_SG && (gravity - fg) >= -0.006;
+  const flatNow = delta != null && Math.abs(delta) < STALL_FLAT_PTS;
+  const isStableNow = !!(og != null && nearFg && flatNow);
+  const stableSinceMs = n(t.stableSinceMs);
+  const stableDays = (isStableNow && stableSinceMs != null)
+    ? round((now - stableSinceMs) / 86_400_000, 1) : (isStableNow ? 0 : null);
+  const requiredStableDays = t.dryHopped ? 6 : 3;
+  const terminalConfirmed = stableDays != null && stableDays >= requiredStableDays;
+
   // --- alert conditions (severity: problem | warning | milestone) ---
   // GRAVITY-based alerts require a batch actually ASSIGNED to this tank (OG present).
   // Without that, any Tilt reading is either absent or BORROWED from another tank's
@@ -107,7 +122,11 @@ export function computeDerived(t, now = 0) {
     alerts.push({ key: 'assignment_suspect', severity: 'problem', label: 'ASSIGNMENT SUSPECT' });
   if (hasBatch && gravityAgeMin != null && gravityAgeMin > SIGNAL_LOST_MIN)
     alerts.push({ key: 'signal_lost', severity: 'warning', label: 'TILT SIGNAL LOST' });
-  if (hasBatch && gravity != null && fg != null && (gravity - fg) <= NEAR_TERMINAL_SG)
+  // confirmed-terminal is a stronger, better milestone than bare near-terminal:
+  // gravity has HELD stable for the required window (3d, or 6d dry-hopped).
+  if (hasBatch && terminalConfirmed)
+    alerts.push({ key: 'terminal_confirmed', severity: 'milestone', label: `TERMINAL ${stableDays}d STABLE` });
+  else if (hasBatch && gravity != null && fg != null && (gravity - fg) <= NEAR_TERMINAL_SG)
     alerts.push({ key: 'approaching_terminal', severity: 'milestone', label: 'NEAR TERMINAL' });
   const rank = { problem: 0, warning: 1, milestone: 2 };
   alerts.sort((a, b) => rank[a.severity] - rank[b.severity]);
@@ -115,6 +134,8 @@ export function computeDerived(t, now = 0) {
   return {
     attenuationPct, progressToFgPct, paceVsSchedule, dropFromPeakPts, daysToTerminal,
     projectedFgReach, tiltProbeDeltaF, gravityAgeMin, fermentationStarted, activelyFermenting, alerts,
+    // gravity stability (readiness signal)
+    isStableNow, stableDays, terminalConfirmed, requiredStableDays,
   };
 }
 

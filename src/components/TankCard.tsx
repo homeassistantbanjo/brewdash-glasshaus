@@ -250,14 +250,14 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                   ring) so an empty tank still reads as a LIVE instrument on standby */}
               <ProgressRing pct={null} size={210} color={accent} active />
               <ConicalFermenter state={vessel} width={104} height={164} />
-              {/* center status glyph over the vessel */}
-              <div style={{
-                position: 'absolute', fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 2,
-                fontWeight: 700, color: hexA(accent, 0.8), textShadow: `0 0 8px ${hexA(accent, 0.5)}`,
-                bottom: 34,
-              }}>{tank.status === 'Dirty' ? 'CLEAN' : 'EMPTY'}</div>
+              {/* (no center glyph — the status chip below states it clearly, and a
+                  label over the vessel both overlapped the artwork and read as a
+                  contradiction next to "NEEDS CLEANING") */}
             </div>
             {/* STANDBY status readout — glowing chamfered chip */}
+            {/* ONE status readout — the ACTION to take (not a restatement of the
+                header's status word). Header already says DIRTY/READY; this says
+                what to DO about it, once. */}
             <div style={{
               fontFamily: theme.font.mono, fontSize: 12, letterSpacing: 2, fontWeight: 700,
               textTransform: 'uppercase', color: accent, textShadow: textGlow(accent, 0.8),
@@ -266,8 +266,9 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
               borderRadius: fx().brackets ? 0 : theme.radius.sm,
               border: `1px solid ${hexA(accent, 0.5)}`, background: hexA(accent, 0.08),
             }}>
-              {tank.status === 'Dirty' ? '◈ NEEDS CLEANING'
-                : isActiveBrew(tank.status) ? '◈ AWAITING ASSIGNMENT'
+              {!tank.hasController ? '◈ NO CONTROLLER'
+                : tank.status === 'Dirty' ? '◈ CLEAN & SANITIZE'
+                : isActiveBrew(tank.status) ? '◈ ASSIGN A BATCH'
                 : '◈ STANDBY · READY'}
             </div>
             {/* even idle, show LIVE diagnostics so the card carries real data */}
@@ -277,12 +278,13 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
               <TickReadout value={tank.daysSinceCleaned != null ? String(tank.daysSinceCleaned) : '—'} unit="d" label="Since Clean"
                 color={tank.status === 'Dirty' ? stateColor('warn') : theme.color.textLabel} />
             </div>
-            <div style={{ fontFamily: theme.font.sans, fontSize: 12, color: theme.color.textDim, textAlign: 'center', padding: '2px 14px 0' }}>
-              {!tank.hasController ? 'No controller wired'
-                : isActiveBrew(tank.status)
-                  ? '⚙ Manage to pick which beer is in this tank'
-                  : idleNote(tank)}
-            </div>
+            {/* only a hint when it adds NEW info (batch-picker guidance); no
+                redundant "Dirty 1d — clean it" line (header + chip already cover it) */}
+            {isActiveBrew(tank.status) && tank.hasController && (
+              <div style={{ fontFamily: theme.font.sans, fontSize: 12, color: theme.color.textDim, textAlign: 'center', padding: '2px 14px 0' }}>
+                ⚙ Manage to pick which beer is in this tank
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -417,7 +419,23 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                   { k: 'Days fermenting', v: b!.daysFermenting?.toFixed(1) ?? '—' },
                 ],
               })} />
-            <TickReadout value={batch!.expectedFg?.toFixed(3) ?? '—'} label="Target FG" color={theme.color.amber} />
+            {/* STABLE — days gravity has held terminal; green once confirmed
+                (≥3d, or ≥6d dry-hopped) = ready to move to D-rest/crash. THE
+                readiness signal. Dim '—' until it enters the terminal band. */}
+            <TickReadout value={stableStr(batch!.stableDays)} unit={batch!.stableDays != null ? 'd' : undefined}
+              label="Stable"
+              color={batch!.terminalConfirmed ? theme.color.green : batch!.stableDays != null ? theme.color.cyan : theme.color.textDim}
+              glow={batch!.terminalConfirmed}
+              onClick={() => open({
+                label: 'Gravity stability', value: stableStr(b!.stableDays), unit: ' days',
+                color: b!.terminalConfirmed ? theme.color.green : theme.color.cyan,
+                blurb: 'How long gravity has held terminal (within ~3 pts of expected FG and flat). Turns green once it has been stable long enough to be confirmed terminal — 3 days normally, ~6 for dry-hopped beers (hop creep can re-ferment). This is the gate before diacetyl rest / cold crash / packaging.',
+                facts: [
+                  { k: 'Confirmed terminal?', v: b!.terminalConfirmed ? 'YES' : 'not yet' },
+                  { k: 'Current gravity', v: b!.gravity.value?.toFixed(3) ?? '—' },
+                  { k: 'Expected FG', v: b!.expectedFg?.toFixed(3) ?? '—' },
+                ],
+              })} />
             <TickReadout value={ageStr(batch!.tiltGravityAgeMin)} label="Tilt Age"
               color={batch!.tiltGravityAgeMin != null && batch!.tiltGravityAgeMin > 15 ? stateColor('warn') : theme.color.textDim} />
             <TickReadout value={tank.daysSinceCleaned != null ? String(tank.daysSinceCleaned) : '—'} unit="d"
@@ -519,6 +537,8 @@ function ageStr(min: number | null): string {
   return '>1d';
 }
 function pct(n: number | null): string { return n == null ? '—' : String(Math.round(n)); }
+/** Gravity-stable days → compact string; '—' when not yet in the terminal band. */
+function stableStr(d: number | null): string { return d == null ? '—' : d.toFixed(1); }
 
 /** Temperature-in-band as a 0–100 arc for the inner hero ring: 100% = probe dead
  *  on setpoint, falling linearly to 0 at ±5°F off. Null when either temp missing. */

@@ -296,6 +296,10 @@ export interface ActiveBatch {
   gravityDropFromPeak: number | null;
   /** minutes since the Tilt last pushed a gravity reading (freshness) */
   tiltGravityAgeMin: number | null;
+  /** days gravity has held terminal-stable (near FG + flat); null when not stable */
+  stableDays: number | null;
+  /** true once stable ≥ the required window (3d normal, 6d dry-hopped) */
+  terminalConfirmed: boolean;
 
   /** raw gravity/temp readings for inline sparklines, oldest→newest.
    *  Sourced from all_batches_data.readings[] (per-Tilt). */

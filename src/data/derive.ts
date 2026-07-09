@@ -259,6 +259,8 @@ export function composeBatch(
     alerts: [],   // populated by the hook after compose (needs resolved Tilt color)
     gravityDropFromPeak: null,
     tiltGravityAgeMin: null,
+    stableDays: null,
+    terminalConfirmed: false,
 
     verification: verifyAssignment(beerTemp.value, tank.probeTemp.value, now),
   };

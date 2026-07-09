@@ -68,25 +68,44 @@ export function InsightPanel({ insight }: { insight: Insight | null }) {
               fontSize: 16, cursor: 'pointer',
             }}>✕</button>
           </div>
-          <div style={{ fontFamily: theme.font.sans, fontSize: 15, fontWeight: 600, color: theme.color.text, marginBottom: 6 }}>
-            {insight.headline}
+          {/* LIST layout — each part on its own labeled row with dividers, so it
+              reads as discrete items instead of one mashed-together paragraph. */}
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <InsightRow label="STATUS" color={m.color} strong>{insight.headline}</InsightRow>
+            {insight.detail && <InsightRow label="DETAIL" color={theme.color.textFaint}>{insight.detail}</InsightRow>}
+            {insight.action && <InsightRow label="NEXT" color={m.color}>{insight.action}</InsightRow>}
           </div>
-          {insight.detail && (
-            <div style={{ fontFamily: theme.font.sans, fontSize: 13, color: theme.color.textLabel, lineHeight: 1.5 }}>
-              {insight.detail}
-            </div>
-          )}
-          {insight.action && (
-            <div style={{
-              marginTop: 10, padding: '8px 10px', borderRadius: theme.radius.sm,
-              background: theme.color.inset, border: `1px solid ${theme.color.panelBorder}`,
-              fontFamily: theme.font.sans, fontSize: 13, color: theme.color.text,
-            }}>
-              <span style={{ color: m.color, fontWeight: 700 }}>→ </span>{insight.action}
-            </div>
-          )}
+          <div style={{
+            marginTop: 10, paddingTop: 8, borderTop: `1px solid ${theme.color.panelBorder}`,
+            fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 1, color: theme.color.textDim,
+            textAlign: 'center',
+          }}>
+            open the <span style={{ color: m.color }}>INSIGHTS</span> tab for the full per-tank + equipment breakdown
+          </div>
         </div>
       )}
     </>
+  );
+}
+
+/** One labeled row in the insight list — a small uppercase tag + the text. */
+function InsightRow({ label, color, strong, children }: {
+  label: string; color: string; strong?: boolean; children: React.ReactNode;
+}) {
+  return (
+    <div style={{
+      display: 'flex', gap: 10, padding: '7px 0',
+      borderBottom: `1px solid ${theme.color.panelBorder}`,
+    }}>
+      <span style={{
+        fontFamily: theme.font.mono, fontSize: 9, letterSpacing: 1, fontWeight: 700,
+        color, minWidth: 42, paddingTop: 2, flexShrink: 0,
+      }}>{label}</span>
+      <span style={{
+        fontFamily: theme.font.sans, fontSize: strong ? 14 : 13,
+        fontWeight: strong ? 600 : 400,
+        color: strong ? theme.color.text : theme.color.textLabel, lineHeight: 1.45,
+      }}>{children}</span>
+    </div>
   );
 }
