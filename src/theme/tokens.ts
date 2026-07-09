@@ -66,6 +66,12 @@ export const theme = {
 /** The active theme's FX flags (brackets / scanlines / vesselRing / etc.). */
 export function fx(): ThemeFx { return THEMES[activeName].fx; }
 
+/** Text-shadow bloom for glowing HUD numerals, scaled by the theme's glow. */
+export function textGlow(c: string, strength = 1): string {
+  const s = strength * THEMES[activeName].fx.glowScale;
+  return `0 0 ${8 * s}px ${hexA(c, Math.min(0.5 * s, 0.9))}, 0 0 ${2 * s}px ${hexA(c, Math.min(0.8 * s, 1))}`;
+}
+
 export function getThemeName(): string { return activeName; }
 
 export function setTheme(name: string): void {

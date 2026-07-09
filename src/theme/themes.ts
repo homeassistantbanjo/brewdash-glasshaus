@@ -89,7 +89,7 @@ const hud: ThemeDef = {
     blue: '#4fa8ff', green: '#4fe6b0', red: '#ff5a6e',
     purple: '#b98bff', yellow: '#ffe14f',
   },
-  fx: { glowScale: 1.6, brackets: true, scanlines: true, animatedGrid: true, radius: 'sharp', vesselRing: true },
+  fx: { glowScale: 2.2, brackets: true, scanlines: true, animatedGrid: true, radius: 'sharp', vesselRing: true },
 };
 
 // ── cyberpunk: neon magenta + cyan, heavy bloom ───────────────────────────────
@@ -97,19 +97,19 @@ const cyberpunk: ThemeDef = {
   name: 'cyberpunk',
   label: 'Cyberpunk',
   color: {
-    bgBase: '#0a0410',
-    bgGrid: 'rgba(255,45,149,0.05)',
-    panel: 'rgba(20, 8, 28, 0.6)',
-    panelHi: 'rgba(28, 10, 38, 0.75)',
-    panelBorder: 'rgba(255,45,149,0.28)',
-    panelBorderHi: 'rgba(56,230,255,0.5)',
-    inset: 'rgba(4, 0, 10, 0.55)',
-    text: '#fdeaff', textDim: '#a06fb8', textFaint: '#5a3a70', textLabel: '#d68fd6',
-    amber: '#ffb347', cyan: '#2de6ff',
-    blue: '#5b8dff', green: '#3dffb0', red: '#ff2d6a',
-    purple: '#ff5cf0', yellow: '#ffe14f',
+    bgBase: '#0c0316',
+    bgGrid: 'rgba(255,45,149,0.08)',
+    panel: 'rgba(26, 6, 40, 0.62)',
+    panelHi: 'rgba(36, 8, 54, 0.78)',
+    panelBorder: 'rgba(255,45,149,0.45)',            // hot magenta edges
+    panelBorderHi: 'rgba(56,230,255,0.7)',           // electric cyan hi
+    inset: 'rgba(8, 0, 16, 0.6)',
+    text: '#ffe6ff', textDim: '#c48fd8', textFaint: '#6a4488', textLabel: '#ff9fe8',
+    amber: '#ffb347', cyan: '#1ef0ff',               // hotter neon cyan
+    blue: '#5b8dff', green: '#2effc0', red: '#ff1f5e',
+    purple: '#ff3df0', yellow: '#ffe14f',            // hot magenta primary
   },
-  fx: { glowScale: 2.0, brackets: true, scanlines: true, animatedGrid: true, radius: 'sharp', vesselRing: true },
+  fx: { glowScale: 3.0, brackets: true, scanlines: true, animatedGrid: true, radius: 'sharp', vesselRing: true },
 };
 
 // ── lcars: Star Trek console — amber/lilac pills on black ──────────────────────

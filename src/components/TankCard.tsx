@@ -7,7 +7,7 @@ import { MetricDetail, MetricDetailSpec } from './MetricDetail';
 import { EquipmentChip } from './EquipmentStrip';
 import { CornerBrackets, ScanLine } from './HudFrame';
 import { ProgressRing } from './ProgressRing';
-import { theme, stateColor, hexA } from '../theme/tokens';
+import { theme, stateColor, hexA, textGlow } from '../theme/tokens';
 import { ActiveBatch, AlertSeverity, EquipmentPower, Tank, isActiveBrew } from '../types/domain';
 
 /** A thin uppercase section divider used to group the card's telemetry into
@@ -191,10 +191,10 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
               })} />
             {/* vessel wrapped in a HUD targeting ring (theme-gated) showing
                 attenuation progress; ring sits behind, vessel centered over it. */}
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 176, height: 200 }}>
-              <ProgressRing pct={batch!.attenuationProgress ?? null} size={196} color={accent} active={active} />
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 200, height: 216 }}>
+              <ProgressRing pct={batch!.attenuationProgress ?? null} size={216} color={accent} active={active} />
               <ConicalFermenter state={vessel} fillPct={batch!.attenuationProgress ?? null}
-                active={active} width={116} height={176} />
+                active={active} width={110} height={172} />
             </div>
             {/* right headline: attenuation progress */}
             <HeadlineStat align="left"
@@ -214,14 +214,28 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
               })} />
           </>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '20px 0' }}>
-            <ConicalFermenter state={vessel} width={116} height={186} />
-            <div style={{ fontFamily: theme.font.sans, fontSize: 13, color: theme.color.textDim, textAlign: 'center', padding: '0 12px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '16px 0' }}>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 200, height: 200 }}>
+              {/* dim idle ring behind the empty vessel — reads as "system standby",
+                  not dead space (HUD themes only; no-op elsewhere) */}
+              <ProgressRing pct={null} size={200} color={accent} active={false} />
+              <ConicalFermenter state={vessel} width={110} height={172} />
+            </div>
+            {/* STANDBY chip — glowing status pill instead of bare text */}
+            <div style={{
+              fontFamily: theme.font.mono, fontSize: 11, letterSpacing: 2, fontWeight: 700,
+              textTransform: 'uppercase', color: accent, textShadow: textGlow(accent, 0.7),
+              padding: '3px 12px', borderRadius: theme.radius.sm,
+              border: `1px solid ${hexA(accent, 0.4)}`, background: hexA(accent, 0.06),
+            }}>
+              {tank.status === 'Dirty' ? '● NEEDS CLEANING'
+                : isActiveBrew(tank.status) ? '● AWAITING ASSIGNMENT'
+                : '● STANDBY'}
+            </div>
+            <div style={{ fontFamily: theme.font.sans, fontSize: 12.5, color: theme.color.textDim, textAlign: 'center', padding: '0 12px' }}>
               {!tank.hasController ? 'No controller wired'
-                /* status says active but no batch resolved (e.g. >1 fermenting → can't
-                   auto-infer) — tell the user to assign, NOT "out of service". */
                 : isActiveBrew(tank.status)
-                  ? '⚠ Batch unassigned — ⚙ Manage to pick which beer is in this tank'
+                  ? '⚙ Manage to pick which beer is in this tank'
                   : idleNote(tank)}
             </div>
           </div>
@@ -401,9 +415,9 @@ function HeadlineStat({ value, unit, label, sub, color, align, big, onClick }: {
       cursor: onClick ? 'pointer' : undefined,
     }}>
       <div style={{
-        fontFamily: theme.font.mono, fontSize: big ? 34 : 24, fontWeight: 600, lineHeight: 1,
+        fontFamily: theme.font.mono, fontSize: big ? 38 : 24, fontWeight: 600, lineHeight: 1,
         color, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
-        textShadow: `0 0 16px ${hexA(color, 0.4)}`,
+        textShadow: textGlow(color, big ? 1.1 : 0.8),
       }}>
         {value}{unit && <span style={{ fontSize: big ? 16 : 12, color: theme.color.textDim }}>{unit}</span>}
       </div>

@@ -13,14 +13,17 @@ interface Props {
   height?: number;
 }
 
-const STATE_COLOR: Record<VesselState, string> = {
-  healthy: theme.color.green,
-  cooling: theme.color.cyan,
-  warn: theme.color.amber,
-  fault: theme.color.red,
-  idle: theme.color.textDim,
-  empty: theme.color.textFaint,
-};
+// read live theme colors (getter) so the vessel recolors on a theme switch
+function stateColorOf(state: VesselState): string {
+  switch (state) {
+    case 'healthy': return theme.color.green;
+    case 'cooling': return theme.color.cyan;
+    case 'warn': return theme.color.amber;
+    case 'fault': return theme.color.red;
+    case 'idle': return theme.color.textDim;
+    case 'empty': return theme.color.textFaint;
+  }
+}
 
 /**
  * An animated conical fermenter. The vessel silhouette (cylinder + cone) glows
@@ -33,7 +36,7 @@ const STATE_COLOR: Record<VesselState, string> = {
 export function ConicalFermenter({
   state, fillPct = null, active = false, width = 120, height = 200,
 }: Props) {
-  const c = STATE_COLOR[state];
+  const c = stateColorOf(state);
   const uid = useMemo(() => `cf-${state}-${Math.round((fillPct ?? 0))}-${width}`, [state, fillPct, width]);
 
   // Geometry in a 100x180 viewBox: neck, cylinder body, cone to a valve.

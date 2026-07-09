@@ -49,13 +49,28 @@ export function ProgressRing({ pct, size = 210, color, active }: {
       </g>
       {/* faint full track */}
       <circle cx={cx} cy={cy} r={r} fill="none" stroke={hexA(c, 0.12)} strokeWidth={2} />
+      {/* a second, faster counter-rotating inner reticle arc (HUD "alive" feel) */}
+      {active && (
+        <circle cx={cx} cy={cy} r={r - 6} fill="none" stroke={hexA(c, 0.35)} strokeWidth={1}
+          strokeDasharray={`${circ * 0.12} ${circ * 0.88}`}
+          style={{ transformOrigin: 'center', animation: 'ghring2 12s linear infinite' }} />
+      )}
+      <style>{`@keyframes ghring2 { to { transform: rotate(-360deg); } }`}</style>
       {/* glowing progress arc, starting at 12 o'clock */}
       {pct != null && (
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke={c} strokeWidth={3}
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke={c} strokeWidth={3.5}
           strokeLinecap="round"
           strokeDasharray={`${dash} ${circ - dash}`}
           transform={`rotate(-90 ${cx} ${cy})`}
-          style={{ filter: `drop-shadow(0 0 5px ${hexA(c, 0.8)})`, transition: 'stroke-dasharray 0.8s ease' }} />
+          style={{ filter: `drop-shadow(0 0 7px ${hexA(c, 0.9)})`, transition: 'stroke-dasharray 0.8s ease' }} />
+      )}
+      {/* progress % readout on the ring foot */}
+      {pct != null && (
+        <text x={cx} y={size - 6} textAnchor="middle"
+          fontFamily="'JetBrains Mono', monospace" fontSize={11} fontWeight={700}
+          fill={c} style={{ filter: `drop-shadow(0 0 4px ${hexA(c, 0.8)})` }}>
+          {Math.round(p)}%
+        </text>
       )}
     </svg>
   );
