@@ -7,7 +7,8 @@ import { AlertBar } from './AlertBar';
 import { GraphsView } from './GraphsView';
 import { InsightsView } from './InsightsView';
 import { InsightPanel } from './InsightPanel';
-import { theme, stateColor, hexA } from '../theme/tokens';
+import { ThemeSwitcher } from './ThemeSwitcher';
+import { theme, stateColor, hexA, useThemeName } from '../theme/tokens';
 import { useActiveBatches, useGlycol, useEquipment, useSyncBatchOptions, usePlantDiag, useInsight } from '../hooks/useBrewery';
 import { Tank, isActiveBrew } from '../types/domain';
 import logo from '../assets/iconoclast-logo.jpg';
@@ -18,6 +19,7 @@ export function Overview() {
   const equipment = useEquipment();
   const plantDiag = usePlantDiag();
   const insight = useInsight();
+  useThemeName(); // re-render this whole view when the theme switches
   // keep each tank's batch picker options in sync with Brewfather's live
   // Fermenting set (adds new batches, prunes departed ones → marks tank Dirty)
   useSyncBatchOptions();
@@ -113,6 +115,7 @@ export function Overview() {
               }}>{v === 'tanks' ? 'Tanks' : v === 'graphs' ? 'Graphs' : 'Insights'}</button>
             ))}
           </div>
+          <ThemeSwitcher />
           <div style={{ fontFamily: theme.font.mono, fontSize: 11, color: theme.color.textDim }}>
             {fermentingCount} FERMENTING · {tanks.length} TANKS
           </div>

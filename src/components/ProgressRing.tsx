@@ -1,0 +1,62 @@
+/**
+ * A HUD targeting-ring gauge that wraps the fermenter vessel: an outer track +
+ * a glowing arc showing attenuation progress (0–100%), plus faint tick marks
+ * around the circumference. Theme-gated on fx().vesselRing — renders nothing on
+ * themes that don't want it, so the vessel just sits bare on `command`.
+ *
+ * Sized to sit BEHIND/around the vessel; place it in a relative container with
+ * the ConicalFermenter centered over it.
+ */
+import { theme, hexA, fx } from '../theme/tokens';
+
+export function ProgressRing({ pct, size = 210, color, active }: {
+  /** 0–100 progress; null → just the track + ticks (no arc) */
+  pct: number | null;
+  size?: number;
+  color?: string;
+  /** when actively fermenting, the ring gets a slow rotation on its tick layer */
+  active?: boolean;
+}) {
+  if (!fx().vesselRing) return null;
+  const c = color ?? theme.color.cyan;
+  const r = size / 2 - 8;
+  const cx = size / 2, cy = size / 2;
+  const circ = 2 * Math.PI * r;
+  const p = pct != null ? Math.max(0, Math.min(100, pct)) : 0;
+  const dash = (p / 100) * circ;
+
+  // tick marks around the ring (every 15°)
+  const ticks = Array.from({ length: 24 }, (_, i) => {
+    const ang = (i / 24) * 2 * Math.PI - Math.PI / 2;
+    const r1 = r + 3, r2 = r + (i % 2 === 0 ? 8 : 5);
+    return {
+      x1: cx + r1 * Math.cos(ang), y1: cy + r1 * Math.sin(ang),
+      x2: cx + r2 * Math.cos(ang), y2: cy + r2 * Math.sin(ang),
+      major: i % 2 === 0,
+    };
+  });
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}
+      style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)', pointerEvents: 'none', zIndex: 0 }}>
+      {/* tick layer (slowly rotates while active) */}
+      <g style={active ? { transformOrigin: 'center', animation: 'ghring 40s linear infinite' } : undefined}>
+        <style>{`@keyframes ghring { to { transform: rotate(360deg); } }`}</style>
+        {ticks.map((t, i) => (
+          <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2}
+            stroke={hexA(c, t.major ? 0.5 : 0.25)} strokeWidth={t.major ? 1.4 : 1} />
+        ))}
+      </g>
+      {/* faint full track */}
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke={hexA(c, 0.12)} strokeWidth={2} />
+      {/* glowing progress arc, starting at 12 o'clock */}
+      {pct != null && (
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke={c} strokeWidth={3}
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${circ - dash}`}
+          transform={`rotate(-90 ${cx} ${cy})`}
+          style={{ filter: `drop-shadow(0 0 5px ${hexA(c, 0.8)})`, transition: 'stroke-dasharray 0.8s ease' }} />
+      )}
+    </svg>
+  );
+}

@@ -11,3 +11,11 @@ dist
 
 # LLM prototype key (never commit)
 .anthropic-key
+
+# local HA token for rotation (never commit)
+.ha_token
+
+# local dev/screenshot artifacts
+.devport
+.devserver.log
+.shots/

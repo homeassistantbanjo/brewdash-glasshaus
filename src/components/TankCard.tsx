@@ -5,6 +5,8 @@ import { ConicalFermenter, VesselState } from './ConicalFermenter';
 import { SetpointControl } from './SetpointControl';
 import { MetricDetail, MetricDetailSpec } from './MetricDetail';
 import { EquipmentChip } from './EquipmentStrip';
+import { CornerBrackets, ScanLine } from './HudFrame';
+import { ProgressRing } from './ProgressRing';
 import { theme, stateColor, hexA } from '../theme/tokens';
 import { ActiveBatch, AlertSeverity, EquipmentPower, Tank, isActiveBrew } from '../types/domain';
 
@@ -112,6 +114,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           : `0 4px 20px rgba(0,0,0,0.4)`,
       transition: 'box-shadow 0.2s, border-color 0.2s',
       display: 'flex', flexDirection: 'column',
+      position: 'relative', // anchor for HUD overlays (brackets / scan line)
       // The card FITS its column at any viewport — no internal scroll. Fixed
       // sections (hero, grid, setpoint, controller) take natural height; the
       // sparkline region flexes to fill/absorb whatever's left (see below), so a
@@ -119,6 +122,11 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
       // the trends rather than spawning a scrollbar. overflow hidden = hard no-scroll.
       overflow: 'hidden', height: '100%', minHeight: 0,
     }}>
+      {/* HUD chrome — theme-gated (no-op on `command`): targeting-corner brackets
+          tinted to the card's accent, and a slow scan-line sweep for active brews. */}
+      <CornerBrackets color={hexA(accent, 0.7)} />
+      {fermenting && <ScanLine color={accent} />}
+
       {/* header — tank label · status · explicit ⚙ Manage button (opens the
           Assign/Program modal). The card body is NOT clickable; only metrics
           (detail popups) and this button do anything, so it's unambiguous. */}
@@ -181,8 +189,13 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                 ],
                 source: `Tilt ${b!.tiltColor ?? '?'} · sensor.tilt_${(b!.tiltColor ?? '').toLowerCase()}_gravity`,
               })} />
-            <ConicalFermenter state={vessel} fillPct={batch!.attenuationProgress ?? null}
-              active={active} width={116} height={176} />
+            {/* vessel wrapped in a HUD targeting ring (theme-gated) showing
+                attenuation progress; ring sits behind, vessel centered over it. */}
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 176, height: 200 }}>
+              <ProgressRing pct={batch!.attenuationProgress ?? null} size={196} color={accent} active={active} />
+              <ConicalFermenter state={vessel} fillPct={batch!.attenuationProgress ?? null}
+                active={active} width={116} height={176} />
+            </div>
             {/* right headline: attenuation progress */}
             <HeadlineStat align="left"
               value={pct(batch!.attenuationProgress)} unit="%" color={theme.color.blue}
