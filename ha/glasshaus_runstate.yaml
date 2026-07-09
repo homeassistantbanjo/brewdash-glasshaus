@@ -1,0 +1,55 @@
+# =============================================================================
+# GlassHaus runner PERSISTENT STATE  —  Home Assistant PACKAGE
+# =============================================================================
+# Install at <config>/packages/glasshaus_runstate.yaml, restart HA once.
+#
+# WHY: the programs container tracks two pieces of per-tank state that must NOT
+# reset on an HA reboot or a container redeploy:
+#   - the gravity-STABILITY clock (when gravity first went terminal-stable) →
+#     drives the "STABLE Nd" / confirmed-terminal readiness metric
+#   - the fermentation-STARTED latch (one-shot, set once real fermentation begins)
+# Container in-memory state dies on redeploy; and HA does NOT persist externally-
+# POSTed sensor.* states across ITS OWN restart. input_datetime / input_boolean
+# helpers, however, ARE restored by HA across reboots. So the runner writes these
+# helpers and reads them back on startup — surviving both failure modes.
+#
+# Generic per tank. Adding a tank = copy a line, bump the number.
+# =============================================================================
+
+input_datetime:
+  tank_1_stable_since: &stable_since
+    name: Tank 1 Gravity Stable Since
+    has_date: true
+    has_time: true
+  tank_2_stable_since:
+    <<: *stable_since
+    name: Tank 2 Gravity Stable Since
+  tank_3_stable_since:
+    <<: *stable_since
+    name: Tank 3 Gravity Stable Since
+
+input_boolean:
+  tank_1_fermentation_started: &ferm_started
+    name: Tank 1 Fermentation Started
+    icon: mdi:beer
+  tank_2_fermentation_started:
+    <<: *ferm_started
+    name: Tank 2 Fermentation Started
+  tank_3_fermentation_started:
+    <<: *ferm_started
+    name: Tank 3 Fermentation Started
+
+  # per-tank batch key the above are scoped to — when the assigned batch changes,
+  # the runner clears the latch + stability clock. Stored as text so a reboot knows
+  # which batch the persisted state belongs to (avoids carrying stale state to a
+  # new batch). input_text IS restored across HA restarts.
+input_text:
+  tank_1_state_batchkey: &batchkey
+    name: Tank 1 State BatchKey
+    max: 120
+  tank_2_state_batchkey:
+    <<: *batchkey
+    name: Tank 2 State BatchKey
+  tank_3_state_batchkey:
+    <<: *batchkey
+    name: Tank 3 State BatchKey

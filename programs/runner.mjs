@@ -144,6 +144,13 @@ const phaseStartSetpoints = new Map();
 const adopted = new Set(); // tanks whose in-progress ferment we've already adopted this run
 
 function nowIso() { return new Date().toISOString(); }
+/** epoch ms → "YYYY-MM-DD HH:MM:SS" in the container's local TZ, for HA
+ *  input_datetime.set_datetime (which wants local wall-clock, not ISO/UTC). */
+function isoLocal(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 
 async function writeStatus(tankId, obj) {
   await fetch(`${HA_URL}/api/states/sensor.${tankId}_program_status`, {
@@ -231,12 +238,25 @@ async function deriveTank(tankId, by) {
   else if (deltaLegacy != null && deltaLegacy !== 0) delta = deltaLegacy;
   else delta = own;  // HA stats are 0/absent (e.g. truncated) → trust our own slope
 
-  // per-tank persisted state, reset when the batch changes: the fermentation
-  // latch + the gravity-stability start timestamp.
+  // per-tank persisted state — HYDRATED from HA helpers so it survives an HA
+  // reboot AND a container redeploy (in-memory alone dies on both). The helpers
+  // (input_datetime.tank_N_stable_since, input_boolean.tank_N_fermentation_started,
+  // input_text.tank_N_state_batchkey) are written each tick below; HA restores them.
   const batchKey = batchSel || 'none';
-  const prev = latchState.get(tankId);
-  if (!prev || prev.batchKey !== batchKey) latchState.set(tankId, { batchKey, latched: false, stableSinceMs: null });
-  const st = latchState.get(tankId);
+  const storedKey = s(`input_text.${tankId}_state_batchkey`);
+  // if the stored state belongs to a DIFFERENT batch, it's stale → start fresh.
+  const sameBatch = storedKey === batchKey;
+  const hydratedLatch = sameBatch && s(`input_boolean.${tankId}_fermentation_started`) === 'on';
+  const stableSinceState = s(`input_datetime.${tankId}_stable_since`);
+  const hydratedStableMs = sameBatch && usable(stableSinceState) && stableSinceState !== 'unknown'
+    ? Date.parse(stableSinceState.replace(' ', 'T')) : null;
+
+  let st = latchState.get(tankId);
+  if (!st || st.batchKey !== batchKey) {
+    // first sight of this batch this process → seed from the HA-persisted values
+    st = { batchKey, latched: hydratedLatch, stableSinceMs: Number.isFinite(hydratedStableMs) ? hydratedStableMs : null };
+    latchState.set(tankId, st);
+  }
   const prevLatched = st.latched;
 
   // is this batch dry-hopped? (raises the stable-days bar to 6d for hop creep)
@@ -258,12 +278,26 @@ async function deriveTank(tankId, by) {
     dryHopped,
   }, Date.now());
 
-  // persist the latch (one-shot until batch changes)
+  // maintain state, and PERSIST any change to the HA helpers (survives reboots).
+  const before = { latched: st.latched, stableSinceMs: st.stableSinceMs };
   if (d.fermentationStarted) st.latched = true;
-  // maintain the stability clock: start it when gravity first goes stable, clear
-  // it the moment it stops being stable (so stableDays resets on any real move).
   if (d.isStableNow) { if (st.stableSinceMs == null) st.stableSinceMs = Date.now(); }
   else st.stableSinceMs = null;
+
+  // PERSIST state changes to the HA helpers. This is READ-ONLY w.r.t. the beer
+  // (never touches setpoints), so it runs even in DRY_RUN — the whole point is the
+  // clock survives reboots regardless of control mode.
+  if (storedKey !== batchKey) {
+    await callService('input_text', 'set_value', { entity_id: `input_text.${tankId}_state_batchkey`, value: batchKey }).catch(() => {});
+  }
+  if (st.latched !== before.latched || !sameBatch) {
+    await callService('input_boolean', st.latched ? 'turn_on' : 'turn_off', { entity_id: `input_boolean.${tankId}_fermentation_started` }).catch(() => {});
+  }
+  if ((st.stableSinceMs !== before.stableSinceMs || !sameBatch) && st.stableSinceMs != null) {
+    await callService('input_datetime', 'set_datetime', { entity_id: `input_datetime.${tankId}_stable_since`, datetime: isoLocal(st.stableSinceMs) }).catch(() => {});
+  }
+  // (HA input_datetime can't be nulled; when gravity leaves the stable band the
+  //  sameBatch+isStableNow gates make the stored value ignored, so no clear needed.)
 
   // write ONE generic per-tank entity the app + notifications read
   await fetch(`${HA_URL}/api/states/sensor.${tankId}_derived`, {
