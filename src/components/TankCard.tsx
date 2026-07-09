@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useEntity, type EntityName } from '@hakit/core';
 import { Metric } from './Metric';
 import { Sparkline } from './Sparkline';
 import { ConicalFermenter, VesselState } from './ConicalFermenter';
@@ -31,6 +32,20 @@ function CollarPip({ pos, label, value, unit, color, glow }: {
       }}>{value}{unit && <span style={{ fontSize: 9, color: theme.color.textDim }}>{unit}</span>}</span>
     </div>
   );
+}
+
+/** Read the active fermentation-program phase for a tank (from the programs
+ *  container's sensor.tank_N_program_status). Returns the human phase label when a
+ *  program is running, else null. Used to drive the header status. */
+function useProgramPhase(tankId: string): string | null {
+  try {
+    const e = useEntity(`sensor.${tankId}_program_status` as EntityName, { returnNullIfNotFound: true });
+    const a = (e?.attributes as any) ?? null;
+    if (!a || !a.phase || a.phase === 'done') return null;
+    // ignore stale/idle statuses; only surface an actively-running phase
+    if (typeof a.phase === 'string' && a.phase.trim() && a.phase.toLowerCase() !== 'none') return a.phase;
+    return null;
+  } catch { return null; }
 }
 
 /** Ring legend chip — a colored dot + name + value, so you know which concentric
@@ -83,6 +98,8 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
   // full data card. (Named `fermenting` for legacy reasons; means active-brew.)
   const fermenting = isActiveBrew(tank.status) && batch != null;
   const crashing = tank.status === 'Cold Crashing';
+  // active fermentation-program phase (drives the header when a program runs)
+  const programPhase = useProgramPhase(tank.id);
 
   // --- resolve vessel + accent state (color === state) ---
   const dev = batch ? (batch.probeTemp.value ?? 0) - (batch.setpoint.value ?? 0) : 0;
@@ -137,7 +154,13 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
   const b = batch; // shorthand for the specs below (only used when fermenting)
 
   // header status label: cold-crash / phase / lifecycle status
-  const statusLabel = crashing ? '❄ COLD CRASH' : fermenting ? phaseGuess(batch!) : tank.status.toUpperCase();
+  // Header status priority: (1) manual Cold Crashing status, (2) an ACTIVE
+  // fermentation-program phase (cold crash / d-rest / ramp — the programs engine
+  // already knows the stage), (3) gravity-detected ferment phase, (4) lifecycle.
+  const statusLabel = crashing ? '❄ COLD CRASH'
+    : programPhase ? programPhase.toUpperCase()
+    : fermenting ? phaseGuess(batch!)
+    : tank.status.toUpperCase();
   // a mono ID tag for the header — batch number when known, else the tank id
   const idTag = fermenting && batch!.batchNo != null ? `//${batch!.batchNo}` : `//${tank.id.replace('tank_', 'T')}`;
 
@@ -495,7 +518,16 @@ export function alertColor(s: AlertSeverity): string {
     : theme.color.cyan;
 }
 
+/** Gravity-detected fermentation phase (used when NO program is running).
+ *  Layers the real stability signals on top of the crude attenuation bands so a
+ *  beer that's flat-at-FG reads TERMINAL/STABLE even below 78% attenuation, and a
+ *  still-dropping beer honestly reads SLOWING. */
 function phaseGuess(b: ActiveBatch): string {
+  // confirmed terminal = gravity held stable for the required window (3d / 6d)
+  if (b.terminalConfirmed) return 'STABLE';
+  // flat + near FG (but not yet confirmed-stable) → TERMINAL, regardless of the
+  // exact attenuation %. stableDays != null means it's currently in the flat band.
+  if (b.stableDays != null) return 'TERMINAL';
   if (b.attenuation == null) return 'UNKNOWN';
   if (b.attenuation < 30) return 'LAG';
   if (b.attenuation < 60) return 'ACTIVE';
