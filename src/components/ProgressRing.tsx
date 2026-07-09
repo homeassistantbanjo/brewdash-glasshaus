@@ -44,9 +44,27 @@ export function ProgressRing({ pct, size = 210, color, active, innerPct, innerCo
     };
   });
 
+  const sweepId = `sweep-${c.replace('#', '')}`;
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}
       style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)', pointerEvents: 'none', zIndex: 0 }}>
+      {/* RADAR SWEEP — a faint rotating wedge of light inside the ring while active
+          (the classic "scanning" HUD motion). */}
+      {active && (
+        <>
+          <defs>
+            <radialGradient id={sweepId} cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor={hexA(c, 0.18)} />
+              <stop offset="100%" stopColor={hexA(c, 0)} />
+            </radialGradient>
+          </defs>
+          <g style={{ transformOrigin: 'center', animation: 'ghsweep 6s linear infinite' }}>
+            <style>{`@keyframes ghsweep { to { transform: rotate(360deg); } }`}</style>
+            <path d={`M ${cx} ${cy} L ${cx} ${cy - r} A ${r} ${r} 0 0 1 ${cx + r * Math.sin(0.9)} ${cy - r * Math.cos(0.9)} Z`}
+              fill={`url(#${sweepId})`} />
+          </g>
+        </>
+      )}
       {/* tick layer (slowly rotates while active) */}
       <g style={active ? { transformOrigin: 'center', animation: 'ghring 40s linear infinite' } : undefined}>
         <style>{`@keyframes ghring { to { transform: rotate(360deg); } }`}</style>

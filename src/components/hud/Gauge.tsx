@@ -45,7 +45,8 @@ export function BarGauge({ label, value, unit, pct, color, target, glow, onClick
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{value}{unit && <span style={{ fontSize: 9, color: theme.color.textDim }}>{unit}</span>}</span>
       </div>
-      {/* segmented bar */}
+      {/* segmented bar — segments fade+fill in sequence on mount (power-up sweep) */}
+      <style>{`@keyframes ghseg { from { opacity: 0; transform: scaleY(0.3); } to { opacity: 1; transform: scaleY(1); } }`}</style>
       <div style={{ position: 'relative', display: 'flex', gap: 1.5, height: 6 }}>
         {Array.from({ length: segments }, (_, i) => (
           <span key={i} style={{
@@ -53,6 +54,7 @@ export function BarGauge({ label, value, unit, pct, color, target, glow, onClick
             background: i < lit ? c : hexA(c, 0.12),
             boxShadow: i < lit && glow ? `0 0 4px ${hexA(c, 0.7)}` : 'none',
             transition: 'background 0.4s',
+            animation: i < lit ? `ghseg 0.4s ease-out ${i * 0.03}s both` : 'none',
           }} />
         ))}
         {target != null && (

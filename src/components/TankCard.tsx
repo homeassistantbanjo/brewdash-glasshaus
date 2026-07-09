@@ -48,16 +48,20 @@ function RingKey({ color, label, value }: { color: string; label: string; value:
 /** A thin uppercase section divider used to group the card's telemetry into
  *  labeled bands (GRAVITY / TEMPERATURE / SCHEDULE / EQUIPMENT) — legible from
  *  across the room on the wall display, and the structure the tall layout needs. */
-function SectionLabel({ children }: { children: React.ReactNode }) {
+function SectionLabel({ children, accent }: { children: React.ReactNode; accent?: string }) {
+  const cham = fx().brackets;
+  const c = accent ?? theme.color.textFaint;
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8, marginTop: 4,
-    }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 4 }}>
+      {/* leading connector: a bracket tick + short rule that ties the label to the
+          card edge — the "built from parts" chrome */}
+      {cham && <span style={{ width: 6, height: 6, borderLeft: `1px solid ${hexA(c, 0.6)}`, borderTop: `1px solid ${hexA(c, 0.6)}` }} />}
       <span style={{
         fontFamily: theme.font.sans, fontSize: 9, letterSpacing: 1.5,
-        textTransform: 'uppercase', color: theme.color.textFaint, whiteSpace: 'nowrap',
+        textTransform: 'uppercase', color: cham ? hexA(c, 0.85) : theme.color.textFaint, whiteSpace: 'nowrap',
       }}>{children}</span>
-      <span style={{ flex: 1, height: 1, background: theme.color.panelBorder }} />
+      <span style={{ flex: 1, height: 1, background: `linear-gradient(90deg, ${hexA(c, cham ? 0.35 : 0.15)}, transparent)` }} />
+      {cham && <span style={{ width: 3, height: 3, background: hexA(c, 0.6), transform: 'rotate(45deg)' }} />}
     </div>
   );
 }
@@ -284,19 +288,30 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
       </div>
 
       {fermenting && (
-        <div style={{
-          textAlign: 'center', fontFamily: theme.font.mono, fontSize: 12,
-          color: theme.color.textDim, padding: '2px 14px 0',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          <span style={{ color: theme.color.text, fontWeight: 700 }}>{batch!.name}</span>
-          <span style={{ margin: '0 8px' }}>·</span>DAY {batch!.daysFermenting?.toFixed(1) ?? '—'}
-          {batch!.tiltColor && (
-            <>
-              <span style={{ margin: '0 8px' }}>·</span>
+        /* BATCH NAMEPLATE — the beer's identity, made prominent: a large title
+           with framing connector rules on either side, and a small mono subline
+           (day + assigned Tilt). This is what you read first to know WHAT beer. */
+        <div style={{ padding: '4px 14px 0', textAlign: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ flex: 1, height: 1, background: `linear-gradient(90deg, transparent, ${hexA(accent, 0.5)})` }} />
+            <span style={{ color: accent, fontSize: 8, filter: `drop-shadow(0 0 3px ${accent})` }}>◆</span>
+            <span style={{
+              fontFamily: theme.font.sans, fontSize: 17, fontWeight: 700, letterSpacing: 0.3,
+              color: theme.color.text, textShadow: `0 0 12px ${hexA(accent, 0.4)}`,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '78%',
+            }}>{batch!.name}</span>
+            <span style={{ color: accent, fontSize: 8, filter: `drop-shadow(0 0 3px ${accent})` }}>◆</span>
+            <span style={{ flex: 1, height: 1, background: `linear-gradient(90deg, ${hexA(accent, 0.5)}, transparent)` }} />
+          </div>
+          <div style={{
+            fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 1, color: theme.color.textDim, marginTop: 3,
+          }}>
+            DAY {batch!.daysFermenting?.toFixed(1) ?? '—'}
+            {batch!.tiltColor && <>
+              <span style={{ margin: '0 7px', color: theme.color.textFaint }}>//</span>
               <span style={{ color: theme.color.purple }}>{batch!.tiltColor.toUpperCase()} TILT</span>
-            </>
-          )}
+            </>}
+          </div>
         </div>
       )}
 
@@ -332,7 +347,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           flex: 1, minHeight: 0,   // fill the card; sparkline regions absorb slack
         }}>
           {/* ── GRAVITY ── live SG cluster + the full-ferment gravity curve ─────── */}
-          <SectionLabel>Gravity</SectionLabel>
+          <SectionLabel accent={accent}>Gravity</SectionLabel>
           {/* VEL moved to the hero collar → freed a slot; OG + FG now shown here
               (were popup-only) so the full OG→now→FG story reads at a glance. */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
@@ -363,7 +378,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           </div>
 
           {/* ── TEMPERATURE ── probe / beer / setpoint on their own line + curve ── */}
-          <SectionLabel>Temperature</SectionLabel>
+          <SectionLabel accent={accent}>Temperature</SectionLabel>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
             <TickReadout value={fmt(batch!.probeTemp.value, 1)} unit="°F" label="Probe"
               color={onProfile ? stateColor('ok') : stateColor('bad')} glow={!onProfile}
@@ -387,7 +402,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           </div>
 
           {/* ── SCHEDULE ── where it is in time + projections ──────────────────── */}
-          <SectionLabel>Schedule &amp; Signal</SectionLabel>
+          <SectionLabel accent={accent}>Schedule &amp; Signal</SectionLabel>
           {/* DAY + ETA moved to the hero collar → freed 2 slots; backfilled with the
               expected FG target and Tilt-reading freshness (were not surfaced). */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
@@ -410,7 +425,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           </div>
 
           {/* ── EQUIPMENT ── this tank's controller power/energy + setpoint write ─ */}
-          <SectionLabel>Equipment</SectionLabel>
+          <SectionLabel accent={accent}>Equipment</SectionLabel>
           {controllerPower && <EquipmentChip eq={controllerPower} />}
           {tank.hasController && (
             <SetpointControl tankId={tank.id} current={batch!.setpoint.value} />
