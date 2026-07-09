@@ -9,21 +9,29 @@
  */
 import { theme, hexA, fx } from '../theme/tokens';
 
-export function ProgressRing({ pct, size = 210, color, active }: {
+export function ProgressRing({ pct, size = 210, color, active, innerPct, innerColor }: {
   /** 0–100 progress; null → just the track + ticks (no arc) */
   pct: number | null;
   size?: number;
   color?: string;
   /** when actively fermenting, the ring gets a slow rotation on its tick layer */
   active?: boolean;
+  /** optional SECOND (inner) arc, 0–100 — e.g. temperature-in-band */
+  innerPct?: number | null;
+  innerColor?: string;
 }) {
   if (!fx().vesselRing) return null;
   const c = color ?? theme.color.cyan;
+  const ic = innerColor ?? theme.color.amber;
   const r = size / 2 - 8;
+  const ri = r - 12;                                  // inner arc radius
   const cx = size / 2, cy = size / 2;
   const circ = 2 * Math.PI * r;
+  const circi = 2 * Math.PI * ri;
   const p = pct != null ? Math.max(0, Math.min(100, pct)) : 0;
   const dash = (p / 100) * circ;
+  const pi = innerPct != null ? Math.max(0, Math.min(100, innerPct)) : null;
+  const dashi = pi != null ? (pi / 100) * circi : 0;
 
   // tick marks around the ring (every 15°)
   const ticks = Array.from({ length: 24 }, (_, i) => {
@@ -63,6 +71,17 @@ export function ProgressRing({ pct, size = 210, color, active }: {
           strokeDasharray={`${dash} ${circ - dash}`}
           transform={`rotate(-90 ${cx} ${cy})`}
           style={{ filter: `drop-shadow(0 0 7px ${hexA(c, 0.9)})`, transition: 'stroke-dasharray 0.8s ease' }} />
+      )}
+      {/* SECOND inner arc (e.g. temp-in-band) — faint track + its own glowing arc */}
+      {pi != null && (
+        <>
+          <circle cx={cx} cy={cy} r={ri} fill="none" stroke={hexA(ic, 0.1)} strokeWidth={2} />
+          <circle cx={cx} cy={cy} r={ri} fill="none" stroke={ic} strokeWidth={2.5}
+            strokeLinecap="round"
+            strokeDasharray={`${dashi} ${circi - dashi}`}
+            transform={`rotate(-90 ${cx} ${cy})`}
+            style={{ filter: `drop-shadow(0 0 5px ${hexA(ic, 0.8)})`, transition: 'stroke-dasharray 0.8s ease' }} />
+        </>
       )}
       {/* progress % readout on the ring foot */}
       {pct != null && (

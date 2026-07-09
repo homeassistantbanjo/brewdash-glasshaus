@@ -12,6 +12,27 @@ import { BarGauge, TickReadout } from './hud/Gauge';
 import { theme, stateColor, hexA, textGlow, fx } from '../theme/tokens';
 import { ActiveBatch, AlertSeverity, EquipmentPower, Tank, isActiveBrew } from '../types/domain';
 
+/** A vitals pip that sits in a corner of the hero ring "collar" — a tiny glowing
+ *  value+label the eye picks up radially without leaving the gauge. */
+function CollarPip({ pos, label, value, color, glow }: {
+  pos: 'tl' | 'tr' | 'br' | 'bl'; label: string; value: string; color: string; glow?: boolean;
+}) {
+  const corner: React.CSSProperties =
+    pos === 'tl' ? { top: 2, left: 0, textAlign: 'left', alignItems: 'flex-start' }
+    : pos === 'tr' ? { top: 2, right: 0, textAlign: 'right', alignItems: 'flex-end' }
+    : pos === 'br' ? { bottom: 24, right: 0, textAlign: 'right', alignItems: 'flex-end' }
+    : { bottom: 24, left: 0, textAlign: 'left', alignItems: 'flex-start' };
+  return (
+    <div style={{ position: 'absolute', display: 'flex', flexDirection: 'column', gap: 1, ...corner }}>
+      <span style={{
+        fontFamily: theme.font.mono, fontSize: 14, fontWeight: 600, lineHeight: 1, color,
+        fontVariantNumeric: 'tabular-nums', textShadow: glow ? textGlow(color, 0.7) : `0 0 6px ${hexA(color, 0.4)}`,
+      }}>{value}</span>
+      <span style={{ fontFamily: theme.font.sans, fontSize: 8, letterSpacing: 1.5, textTransform: 'uppercase', color: theme.color.textFaint }}>{label}</span>
+    </div>
+  );
+}
+
 /** A thin uppercase section divider used to group the card's telemetry into
  *  labeled bands (GRAVITY / TEMPERATURE / SCHEDULE / EQUIPMENT) — legible from
  *  across the room on the wall display, and the structure the tall layout needs. */
@@ -166,12 +187,19 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                 ],
                 source: `Tilt ${b!.tiltColor ?? '?'} · sensor.tilt_${(b!.tiltColor ?? '').toLowerCase()}_gravity`,
               })} />
-            {/* vessel wrapped in a HUD targeting ring (theme-gated) showing
-                attenuation progress; ring sits behind, vessel centered over it. */}
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 200, height: 216 }}>
-              <ProgressRing pct={batch!.attenuationProgress ?? null} size={216} color={accent} active={active} />
+            {/* HERO INSTRUMENT CLUSTER — dual concentric rings (outer = attenuation
+                progress, inner = temperature-in-band) wrapping the vessel, plus a
+                collar of vitals pips (DAY / VEL / ETA) arranged around it. This is
+                the glance-from-across-the-room gauge. */}
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 216, height: 224 }}>
+              <ProgressRing pct={batch!.attenuationProgress ?? null} size={224} color={accent} active={active}
+                innerPct={tempInBandPct(batch!)} innerColor={onProfile ? theme.color.green : theme.color.amber} />
               <ConicalFermenter state={vessel} fillPct={batch!.attenuationProgress ?? null}
-                active={active} width={110} height={172} />
+                active={active} width={104} height={164} />
+              {/* collar pips around the ring */}
+              <CollarPip pos="tl" label="DAY" value={batch!.daysFermenting?.toFixed(1) ?? '—'} color={theme.color.textLabel} />
+              <CollarPip pos="tr" label="VEL" value={velStr(batch!.gravityVelocityPerDay)} color={velColor(batch!.gravityVelocityPerDay)} glow={active} />
+              <CollarPip pos="br" label="ETA" value={fgEtaValue(batch!)} color={theme.color.cyan} />
             </div>
             {/* right headline: attenuation progress */}
             <HeadlineStat align="left"
@@ -269,20 +297,10 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
         }}>
           {/* ── GRAVITY ── live SG cluster + the full-ferment gravity curve ─────── */}
           <SectionLabel>Gravity</SectionLabel>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
-            <TickReadout value={velStr(batch!.gravityVelocityPerDay)} label="SG / day"
-              color={velColor(batch!.gravityVelocityPerDay)} glow={active}
-              onClick={() => open({
-                label: 'Fermentation velocity', value: velStr(b!.gravityVelocityPerDay), unit: ' SG/day',
-                color: velColor(b!.gravityVelocityPerDay),
-                blurb: 'Specific gravity dropped per day (e.g. -0.010 = 10 points). More negative = faster attenuation. Near zero = fermentation has stalled or finished. Drives the ETA-to-terminal estimate.',
-                series: sgSeries, seriesLabel: 'Gravity curve', reference: b!.expectedFg ?? null,
-                referenceLabel: 'FG', referenceColor: theme.color.amber,
-                facts: [
-                  { k: '3h activity (stddev)', v: noiseStr(b!.gravityNoise) },
-                  { k: 'ETA to terminal', v: b!.daysToTerminal != null ? b!.daysToTerminal.toFixed(1) + ' d' : '—' },
-                ],
-              })} />
+          {/* VEL moved to the hero collar → freed a slot; OG + FG now shown here
+              (were popup-only) so the full OG→now→FG story reads at a glance. */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
+            <TickReadout value={batch!.og ? batch!.og.toFixed(3) : '—'} label="OG" color={theme.color.textLabel} />
             {/* attenuation as a segmented BAR gauge — it has a natural 0–100 range */}
             <BarGauge value={fmt(batch!.attenuation, 0)} unit="%" label="Attenuation"
               pct={batch!.attenuation} color={theme.color.blue} glow={active}
@@ -297,6 +315,9 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                 ],
               })} />
             <TickReadout value={fmt(batch!.abv, 1)} unit="%" label="ABV" />
+            {/* settling-proof activity — cumulative drop from the rolling 8h peak */}
+            <TickReadout value={batch!.gravityDropFromPeak != null ? batch!.gravityDropFromPeak.toFixed(1) : '—'} unit="pts"
+              label="Drop/Peak" color={theme.color.cyan} glow={active} />
           </div>
           {/* inline gravity curve (full ferment) with the FG reference line */}
           <div style={{ height: 46, minHeight: 34, flex: '0 1 auto' }}>
@@ -330,23 +351,10 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           </div>
 
           {/* ── SCHEDULE ── where it is in time + projections ──────────────────── */}
-          <SectionLabel>Schedule</SectionLabel>
+          <SectionLabel>Schedule &amp; Signal</SectionLabel>
+          {/* DAY + ETA moved to the hero collar → freed 2 slots; backfilled with the
+              expected FG target and Tilt-reading freshness (were not surfaced). */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
-            <TickReadout value={batch!.daysFermenting?.toFixed(1) ?? '—'} unit="d" label="Day" />
-            <TickReadout value={fgEtaValue(batch!)} label={batch!.projectedFgReach ? 'FG By' : 'ETA'}
-              color={theme.color.cyan}
-              onClick={() => open({
-                label: 'Projected finish', value: fgEtaValue(b!), color: theme.color.cyan,
-                blurb: b!.projectedFgReach
-                  ? 'Projected calendar date this batch reaches its expected final gravity, from the current attenuation velocity (HA-derived, settling-proof).'
-                  : 'Estimated days until terminal gravity at the current velocity.',
-                facts: [
-                  { k: 'Days to terminal', v: b!.daysToTerminal != null ? b!.daysToTerminal.toFixed(1) + ' d' : '—' },
-                  { k: 'Projected date', v: b!.projectedFgReach ?? '—' },
-                  { k: 'Velocity', v: velStr(b!.gravityVelocityPerDay) + ' SG/day' },
-                  { k: 'Expected FG', v: b!.expectedFg?.toFixed(3) ?? '—' },
-                ],
-              })} />
             <TickReadout value={paceValue(batch!.paceVsSchedule)} unit="d" label="Pace"
               color={paceColor(batch!.paceVsSchedule)}
               onClick={batch!.paceVsSchedule == null ? undefined : () => open({
@@ -358,6 +366,9 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                   { k: 'Days fermenting', v: b!.daysFermenting?.toFixed(1) ?? '—' },
                 ],
               })} />
+            <TickReadout value={batch!.expectedFg?.toFixed(3) ?? '—'} label="Target FG" color={theme.color.amber} />
+            <TickReadout value={ageStr(batch!.tiltGravityAgeMin)} label="Tilt Age"
+              color={batch!.tiltGravityAgeMin != null && batch!.tiltGravityAgeMin > 15 ? stateColor('warn') : theme.color.textDim} />
             <TickReadout value={tank.daysSinceCleaned != null ? String(tank.daysSinceCleaned) : '—'} unit="d"
               label="Since Clean" />
           </div>
@@ -457,6 +468,14 @@ function ageStr(min: number | null): string {
   return '>1d';
 }
 function pct(n: number | null): string { return n == null ? '—' : String(Math.round(n)); }
+
+/** Temperature-in-band as a 0–100 arc for the inner hero ring: 100% = probe dead
+ *  on setpoint, falling linearly to 0 at ±5°F off. Null when either temp missing. */
+function tempInBandPct(b: ActiveBatch): number | null {
+  if (b.probeTemp.value == null || b.setpoint.value == null) return null;
+  const dev = Math.abs(b.probeTemp.value - b.setpoint.value);
+  return Math.max(0, Math.min(100, 100 - (dev / 5) * 100));
+}
 
 /** Prefer HA's projected calendar date; fall back to in-app days-to-terminal. */
 function fgEtaValue(b: ActiveBatch): string {
