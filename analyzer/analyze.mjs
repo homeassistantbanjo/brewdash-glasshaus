@@ -125,14 +125,17 @@ function gatherEquipment(by) {
     running: glycolW != null ? glycolW > 200 : null,
     cyclesPerHour: cyclesPerH,
     shortCycling: cyclesPerH != null ? cyclesPerH >= 6 : null, // ≥6 starts/h = short-cycling
+    onHrs1h: runtime1hMin,
     runtimeHrs7d: n('sensor.tank_1_cooling_runtime_7d'),
+    todayKwh: n('sensor.glycol_power_today_s_consumption'),
   };
 
   const kegW = n('sensor.kegerator_power_current_consumption');
   const kegerator = {
     powerW: kegW,
     cooling: kegW != null ? kegW > 10 : null,
-    todayKwh: n('sensor.kegerator_today_s_consumption'),
+    todayKwh: n('sensor.kegerator_power_today_s_consumption'),
+    lifetimeKwh: n('sensor.kegerator_power_total_consumption'),
   };
 
   // per-tank controller wattage + Tilt signal age (only meaningful where present)
@@ -143,6 +146,7 @@ function gatherEquipment(by) {
     return {
       tank: t,
       controllerW: w,
+      todayKwh: n(`sensor.${t}_temp_controller_power_today_s_consumption`),
       probeTempF: n(`sensor.${t}_probe_temp`),
       setpointF: n(`sensor.${t}_setpoint`),
       tiltSignalAgeMin: c ? ageMin(`sensor.tilt_${c}_gravity`) : null,

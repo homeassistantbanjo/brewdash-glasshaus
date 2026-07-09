@@ -25,11 +25,12 @@ export interface TankSection extends Section {
 export interface EquipmentFacts {
   glycol?: {
     reservoirTempF: number | null; powerW: number | null; running: boolean | null;
-    cyclesPerHour: number | null; shortCycling: boolean | null; runtimeHrs7d: number | null;
+    cyclesPerHour: number | null; shortCycling: boolean | null;
+    onHrs1h: number | null; runtimeHrs7d: number | null; todayKwh: number | null;
   };
-  kegerator?: { powerW: number | null; cooling: boolean | null; todayKwh: number | null };
+  kegerator?: { powerW: number | null; cooling: boolean | null; todayKwh: number | null; lifetimeKwh: number | null };
   controllers?: Array<{
-    tank: string; controllerW: number | null; probeTempF: number | null;
+    tank: string; controllerW: number | null; todayKwh: number | null; probeTempF: number | null;
     setpointF: number | null; tiltSignalAgeMin: number | null; tiltSignalLost: boolean | null;
   }>;
 }

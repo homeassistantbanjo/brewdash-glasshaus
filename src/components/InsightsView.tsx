@@ -75,13 +75,19 @@ function EquipmentFactsRow({ facts }: { facts?: EquipmentFacts }) {
     if (g.powerW != null) chips.push({ label: 'Chiller', value: `${Math.round(g.powerW)}W ${g.running ? '· ON' : '· idle'}` });
     if (g.cyclesPerHour != null) chips.push({ label: 'Cycles', value: `${g.cyclesPerHour}/h`, warn: !!g.shortCycling });
     if (g.runtimeHrs7d != null) chips.push({ label: 'Runtime', value: `${g.runtimeHrs7d.toFixed(1)}h/7d` });
+    if (g.todayKwh != null) chips.push({ label: 'Chiller kWh', value: `${g.todayKwh.toFixed(2)} today` });
   }
   if (facts.kegerator?.powerW != null) {
     chips.push({ label: 'Kegerator', value: `${Math.round(facts.kegerator.powerW)}W ${facts.kegerator.cooling ? '· cooling' : ''}` });
+    if (facts.kegerator.todayKwh != null) chips.push({ label: 'Keg kWh', value: `${facts.kegerator.todayKwh.toFixed(2)} today` });
   }
   (facts.controllers || []).forEach((c) => {
-    if (c.controllerW != null) chips.push({ label: c.tank.replace('_', ' '), value: `${c.controllerW.toFixed(1)}W` });
-    if (c.tiltSignalLost) chips.push({ label: `${c.tank.replace('_', ' ')} Tilt`, value: 'SIGNAL LOST', warn: true });
+    const name = c.tank.replace('_', ' ');
+    if (c.controllerW != null) {
+      const kwh = c.todayKwh != null ? ` · ${c.todayKwh.toFixed(2)}kWh` : '';
+      chips.push({ label: name, value: `${c.controllerW.toFixed(1)}W${kwh}` });
+    }
+    if (c.tiltSignalLost) chips.push({ label: `${name} Tilt`, value: 'SIGNAL LOST', warn: true });
   });
   if (!chips.length) return null;
   return (
