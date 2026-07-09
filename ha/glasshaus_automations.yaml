@@ -89,6 +89,41 @@ automation:
     #       content_type: "application/json"
     #       payload: '{"reason": "{{ reason }}"}'
 
+  # ---------------------------------------------------------------------------
+  # STARTUP REPOPULATE — HA-POSTed entities (sensor.glasshaus_insight, the plant
+  # analysis cache) do NOT survive an HA restart; they only reappear on the next
+  # container write. So after HA boots, wait for integrations + Brewfather to
+  # re-sync (the programs container self-heals its sensor.tank_N_derived on its own
+  # 5-min tick, but the analyzer only writes on digest/alert). Poke the analyzer so
+  # the insight badge + the in-app Insights view refill within a couple minutes of a
+  # reboot instead of staying blank until the next 8h digest.
+  # ---------------------------------------------------------------------------
+  - id: gh_insight_repopulate_on_start
+    alias: "GlassHaus • Repopulate insights after HA restart"
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      # give Brewfather + the Tilt/controller integrations time to report so the
+      # analyzer isn't fed a half-loaded state (that's what made a tick fail mid-boot)
+      - delay: "00:02:00"
+      - action: rest_command.glasshaus_insight_trigger
+        data:
+          reason: "ha-restart"
+      # also warm the full-plant analysis cache for the in-app Insights view
+      - action: rest_command.glasshaus_plant_refresh
+    # define BOTH rest_commands in configuration.yaml:
+    #   rest_command:
+    #     glasshaus_insight_trigger:
+    #       url: "http://192.168.50.118:8091/trigger"
+    #       method: POST
+    #       content_type: "application/json"
+    #       payload: '{"reason": "{{ reason }}"}'
+    #     glasshaus_plant_refresh:
+    #       url: "http://192.168.50.118:8091/insights/refresh"
+    #       method: POST
+
   - id: gh_notify_insight
     alias: "GlassHaus • Notify on new insight"
     mode: single
