@@ -7,7 +7,9 @@ import { MetricDetail, MetricDetailSpec } from './MetricDetail';
 import { EquipmentChip } from './EquipmentStrip';
 import { CornerBrackets, ScanLine } from './HudFrame';
 import { ProgressRing } from './ProgressRing';
-import { theme, stateColor, hexA, textGlow } from '../theme/tokens';
+import { Panel } from './hud/Panel';
+import { BarGauge, TickReadout } from './hud/Gauge';
+import { theme, stateColor, hexA, textGlow, fx } from '../theme/tokens';
 import { ActiveBatch, AlertSeverity, EquipmentPower, Tank, isActiveBrew } from '../types/domain';
 
 /** A thin uppercase section divider used to group the card's telemetry into
@@ -97,66 +99,41 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
   const open = (spec: MetricDetailSpec) => setDetail(spec);
   const b = batch; // shorthand for the specs below (only used when fermenting)
 
+  // header status label: cold-crash / phase / lifecycle status
+  const statusLabel = crashing ? '❄ COLD CRASH' : fermenting ? phaseGuess(batch!) : tank.status.toUpperCase();
+  // a mono ID tag for the header — batch number when known, else the tank id
+  const idTag = fermenting && batch!.batchNo != null ? `//${batch!.batchNo}` : `//${tank.id.replace('tank_', 'T')}`;
+
   return (
-    <div style={{
-      background: theme.color.panelHi,
-      backdropFilter: `blur(${theme.blur})`,
-      WebkitBackdropFilter: `blur(${theme.blur})`,
-      border: `1px solid ${focused ? hexA(accent, 0.8) : theme.color.panelBorderHi}`,
-      borderTop: `2px solid ${accent}`,
-      borderRadius: theme.radius.lg,
-      // focus (from an alert-bar click) overrides with a strong accent glow so
-      // the eye jumps to the offending tank; otherwise normal depth shadow.
-      boxShadow: focused
-        ? theme.glow(accent, 0.7)
-        : fermenting
-          ? `0 8px 40px rgba(0,0,0,0.5), inset 0 1px 0 ${hexA('#ffffff', 0.04)}`
-          : `0 4px 20px rgba(0,0,0,0.4)`,
-      transition: 'box-shadow 0.2s, border-color 0.2s',
-      display: 'flex', flexDirection: 'column',
-      position: 'relative', // anchor for HUD overlays (brackets / scan line)
-      // The card FITS its column at any viewport — no internal scroll. Fixed
-      // sections (hero, grid, setpoint, controller) take natural height; the
-      // sparkline region flexes to fill/absorb whatever's left (see below), so a
-      // short display (e.g. 1080p fullscreen at 150% scaling ≈ 720px) compresses
-      // the trends rather than spawning a scrollbar. overflow hidden = hard no-scroll.
-      overflow: 'hidden', height: '100%', minHeight: 0,
-    }}>
+    <Panel accent={focused ? accent : hexA(accent, 0.85)}
+      header={tank.label.toUpperCase()} status={statusLabel} statusColor={accent} id={idTag}
+      glow={fermenting || focused}
+      style={{
+        position: 'relative',
+        boxShadow: focused ? theme.glow(accent, 0.8) : undefined,
+        transition: 'box-shadow 0.2s',
+        overflow: 'hidden', height: '100%', minHeight: 0,
+      }}>
       {/* HUD chrome — theme-gated (no-op on `command`): targeting-corner brackets
-          tinted to the card's accent, and a slow scan-line sweep for active brews. */}
+          + a slow scan-line sweep for active brews. */}
       <CornerBrackets color={hexA(accent, 0.7)} />
       {fermenting && <ScanLine color={accent} />}
 
-      {/* header — tank label · status · explicit ⚙ Manage button (opens the
-          Assign/Program modal). The card body is NOT clickable; only metrics
-          (detail popups) and this button do anything, so it's unambiguous. */}
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: '10px 12px 8px', gap: 8,
-      }}>
-        <span style={{ fontFamily: theme.font.mono, fontSize: 13, fontWeight: 700, color: theme.color.text, letterSpacing: 0.5 }}>
-          {tank.label}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{
-            fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 1,
-            textTransform: 'uppercase', color: accent, fontWeight: 600,
-          }}>
-            {crashing ? '❄ COLD CRASH' : fermenting ? phaseGuess(batch!) : tank.status}
-          </span>
+      {/* Manage button — floated top-right over the panel header bar. */}
+      <div style={{ position: 'absolute', top: 5, right: 10, zIndex: 2 }}>
           <button
             onClick={(e) => { e.stopPropagation(); onClick(); }}
             title={`Manage ${tank.label}`}
             style={{
               fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 0.5,
               display: 'flex', alignItems: 'center', gap: 4,
-              padding: '4px 9px', borderRadius: 6, cursor: 'pointer',
-              border: `1px solid ${theme.color.panelBorderHi}`,
+              padding: '4px 9px', borderRadius: fx().brackets ? 0 : 6, cursor: 'pointer',
+              clipPath: fx().brackets ? 'polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px)' : undefined,
+              border: `1px solid ${hexA(accent, 0.4)}`,
               background: theme.color.inset, color: theme.color.textLabel,
             }}>
             <span style={{ fontSize: 12 }}>⚙</span> MANAGE
           </button>
-        </div>
       </div>
 
       {/* HERO vessel — the big glanceable status signal. Flanked by the two
@@ -293,7 +270,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           {/* ── GRAVITY ── live SG cluster + the full-ferment gravity curve ─────── */}
           <SectionLabel>Gravity</SectionLabel>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
-            <Metric value={velStr(batch!.gravityVelocityPerDay)} label="SG / day"
+            <TickReadout value={velStr(batch!.gravityVelocityPerDay)} label="SG / day"
               color={velColor(batch!.gravityVelocityPerDay)} glow={active}
               onClick={() => open({
                 label: 'Fermentation velocity', value: velStr(b!.gravityVelocityPerDay), unit: ' SG/day',
@@ -306,8 +283,9 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                   { k: 'ETA to terminal', v: b!.daysToTerminal != null ? b!.daysToTerminal.toFixed(1) + ' d' : '—' },
                 ],
               })} />
-            <Metric value={fmt(batch!.attenuation, 0)} unit="%" label="Attenuation"
-              color={theme.color.blue}
+            {/* attenuation as a segmented BAR gauge — it has a natural 0–100 range */}
+            <BarGauge value={fmt(batch!.attenuation, 0)} unit="%" label="Attenuation"
+              pct={batch!.attenuation} color={theme.color.blue} glow={active}
               onClick={() => open({
                 label: 'Apparent attenuation', value: fmt(b!.attenuation, 1), unit: '%', color: theme.color.blue,
                 blurb: 'The yeast-spec figure: % of sugars fermented, (OG−SG)/(OG−1). Distinct from progress-to-FG.',
@@ -318,7 +296,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                   { k: 'ABV so far', v: fmt(b!.abv, 1) + '%' },
                 ],
               })} />
-            <Metric value={fmt(batch!.abv, 1)} unit="%" label="ABV" />
+            <TickReadout value={fmt(batch!.abv, 1)} unit="%" label="ABV" />
           </div>
           {/* inline gravity curve (full ferment) with the FG reference line */}
           <div style={{ height: 46, minHeight: 34, flex: '0 1 auto' }}>
@@ -330,16 +308,17 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           {/* ── TEMPERATURE ── probe / beer / setpoint on their own line + curve ── */}
           <SectionLabel>Temperature</SectionLabel>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
-            <Metric value={fmt(batch!.probeTemp.value, 1)} unit="°F" label="Probe"
+            <TickReadout value={fmt(batch!.probeTemp.value, 1)} unit="°F" label="Probe"
               color={onProfile ? stateColor('ok') : stateColor('bad')} glow={!onProfile}
-              staleness={batch!.probeTemp.staleness}
+              staleFlag={batch!.probeTemp.staleness !== 'live' ? batch!.probeTemp.staleness.toUpperCase() : null}
               onClick={() => open(tempSpec('Probe temp (ITC-308)', b!.probeTemp.value, onProfile ? theme.color.green : theme.color.red, b!))} />
-            <Metric value={fmt(batch!.beerTemp.value, 1)} unit="°F" label="Beer (Tilt)"
-              color={theme.color.green} staleness={batch!.beerTemp.staleness}
+            <TickReadout value={fmt(batch!.beerTemp.value, 1)} unit="°F" label="Beer (Tilt)"
+              color={theme.color.green}
+              staleFlag={batch!.beerTemp.staleness !== 'live' ? batch!.beerTemp.staleness.toUpperCase() : null}
               onClick={() => open(tempSpec('Beer temp (Tilt)', b!.beerTemp.value, theme.color.green, b!))} />
-            <Metric value={fmt(batch!.setpoint.value, 1)} unit="°F" label="Setpoint"
+            <TickReadout value={fmt(batch!.setpoint.value, 1)} unit="°F" label="Setpoint"
               color={theme.color.amber} />
-            <Metric value={tiltProbeDeltaStr(batch!)} unit="°F" label="Δ T−P"
+            <TickReadout value={tiltProbeDeltaStr(batch!)} unit="°F" label="Δ T−P"
               color={tiltProbeDeltaColor(batch!)} glow={tiltProbeSuspect(batch!)}
               onClick={() => open(tempSpec('Tilt vs Probe', b!.beerTemp.value, theme.color.green, b!))} />
           </div>
@@ -353,8 +332,8 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           {/* ── SCHEDULE ── where it is in time + projections ──────────────────── */}
           <SectionLabel>Schedule</SectionLabel>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
-            <Metric value={batch!.daysFermenting?.toFixed(1) ?? '—'} unit="d" label="Day" />
-            <Metric value={fgEtaValue(batch!)} label={batch!.projectedFgReach ? 'FG By' : 'ETA'}
+            <TickReadout value={batch!.daysFermenting?.toFixed(1) ?? '—'} unit="d" label="Day" />
+            <TickReadout value={fgEtaValue(batch!)} label={batch!.projectedFgReach ? 'FG By' : 'ETA'}
               color={theme.color.cyan}
               onClick={() => open({
                 label: 'Projected finish', value: fgEtaValue(b!), color: theme.color.cyan,
@@ -368,7 +347,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                   { k: 'Expected FG', v: b!.expectedFg?.toFixed(3) ?? '—' },
                 ],
               })} />
-            <Metric value={paceValue(batch!.paceVsSchedule)} unit="d" label="Pace"
+            <TickReadout value={paceValue(batch!.paceVsSchedule)} unit="d" label="Pace"
               color={paceColor(batch!.paceVsSchedule)}
               onClick={batch!.paceVsSchedule == null ? undefined : () => open({
                 label: 'Pace vs schedule', value: paceValue(b!.paceVsSchedule), unit: ' days',
@@ -379,7 +358,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                   { k: 'Days fermenting', v: b!.daysFermenting?.toFixed(1) ?? '—' },
                 ],
               })} />
-            <Metric value={tank.daysSinceCleaned != null ? String(tank.daysSinceCleaned) : '—'} unit="d"
+            <TickReadout value={tank.daysSinceCleaned != null ? String(tank.daysSinceCleaned) : '—'} unit="d"
               label="Since Clean" />
           </div>
 
@@ -396,7 +375,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
       )}
 
       {detail && <MetricDetail spec={detail} onClose={() => setDetail(null)} />}
-    </div>
+    </Panel>
   );
 }
 
