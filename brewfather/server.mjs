@@ -152,6 +152,48 @@ async function bfPatchBatch(batchIdOrNo, patch) {
   return json;
 }
 
+// ---- CONDITIONING duration --------------------------------------------------
+// After fermentation confirms terminal, the beer conditions for a while before
+// it's ready to keg. Duration priority (per design):
+//   1. BF fermentation-profile POST-fermentation time steps (Conditioning / Lager
+//      / Secondary / Cold Crash) — if the brewer actually planned them.
+//   2. YEAST TYPE is the primary signal (a lager yeast physically needs cold
+//      lagering regardless of the profile/style label), refined by style: a dark/
+//      strong lager conditions longer than a pale one. Ale → short.
+//   3. (manual override lives in GlassHaus, applied there — not here.)
+// This is a TIME countdown, deliberately separate from the gravity-driven ferm
+// program — it never touches setpoints, so it can't clash with a generated plan.
+const POST_FERMENT_STEP = /^(condition|lager|secondary|cold\s*crash)/i;
+function conditioningPlan(batch, rec) {
+  const f = (rec && rec.fermentation) || batch.fermentation || {};
+  const steps = Array.isArray(f.steps) ? f.steps : [];
+  // 1) explicit post-fermentation time steps in the BF profile
+  const profileDays = steps
+    .filter((s) => typeof s.type === 'string' && POST_FERMENT_STEP.test(s.type))
+    .reduce((sum, s) => sum + (n(s.stepTime) || 0), 0);
+
+  const yeasts = Array.isArray(rec && rec.yeasts) ? rec.yeasts : [];
+  // most-attenuative / first yeast drives the type; lager beats ale if mixed
+  const yeastType = yeasts.some((y) => /lager/i.test(String(y.type))) ? 'Lager'
+    : yeasts.some((y) => /ale/i.test(String(y.type))) ? 'Ale'
+    : (yeasts[0] && yeasts[0].type) || null;
+  const style = (rec && rec.style && (rec.style.name || rec.style.type)) || null;
+  const styleStr = String(style || '');
+  const isLagerYeast = yeastType === 'Lager';
+  const dark = /dark|black|schwarz|dunkel|baltic|bock/i.test(styleStr);
+  const strong = /imperial|double|strong|barleywine|bock|baltic/i.test(styleStr);
+
+  // 2) yeast-type default, refined by style
+  let styleDefault;
+  if (isLagerYeast) styleDefault = (dark || strong) ? 28 : 21;   // lager: 3-4 wk
+  else styleDefault = strong ? 14 : 7;                            // ale: ~1 wk (2 if big)
+
+  const conditionDays = profileDays > 0 ? profileDays : styleDefault;
+  const source = profileDays > 0 ? 'bf-profile'
+    : isLagerYeast ? 'yeast-lager' : (yeastType === 'Ale' ? 'yeast-ale' : 'style-default');
+  return { conditionDays, source, yeastType, style };
+}
+
 // read a batch's current measured values so the panel can prefill (also confirms
 // the key works). Returns just the measured/status fields we care about.
 async function bfGetBatch(batchIdOrNo) {
@@ -165,10 +207,21 @@ async function bfGetBatch(batchIdOrNo) {
   if (!r.ok) throw new Error(`Brewfather HTTP ${r.status}`);
   const b = await r.json();
   const Lto = (v) => (n(v) != null ? +(v / 3.785411784).toFixed(2) : null); // L→gal for display
-  const hops = (b.recipe && Array.isArray(b.recipe.hops)) ? b.recipe.hops : [];
+  const rec = b.recipe || {};
+  const hops = Array.isArray(rec.hops) ? rec.hops : [];
   const dryHop = hops.some((h) => typeof h.use === 'string' && /dry\s*hop/i.test(h.use));
+  const cond = conditioningPlan(b, rec);
   return {
     id: b._id, name: b.name, batchNo: b.batchNo, status: b.status, dryHop,
+    // conditioning duration inputs + resolved target (see conditioningPlan)
+    yeastType: cond.yeastType, style: cond.style,
+    conditionDays: cond.conditionDays, conditionSource: cond.source,
+    // display fields the app needs to keep showing a batch once it leaves
+    // Fermenting (the HA integration drops non-Fermenting batches, so the app
+    // falls back to this endpoint). Timestamps as epoch ms; og as SG.
+    og: b.measuredOg ?? b.estimatedOg ?? null,
+    fermentingStart: b.fermentingStart ? Date.parse(b.fermentingStart) : null,
+    fermentingEnd: b.fermentingEnd ? Date.parse(b.fermentingEnd) : null,
     measured: {
       preBoilGravity: b.measuredPreBoilGravity ?? null,
       postBoilGravity: b.measuredPostBoilGravity ?? null,

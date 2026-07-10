@@ -530,14 +530,19 @@ function readiness(b: ActiveBatch, programPhase: string | null): { headline: str
   const t = theme.color;
   if (programPhase) return { headline: programPhase.toUpperCase(), sub: 'running fermentation program', color: t.cyan };
   // Gravity held flat for the full confirmation window → FERMENTATION is DONE, so
-  // the beer moves to conditioning. NOT "ready to package" — conditioning/lagering
-  // takes time (weeks for a lager); packaging-readiness is a separate, later
-  // milestone we don't track from gravity. Say only what's true: fermentation
-  // complete, now conditioning.
-  if (b.terminalConfirmed) {
-    const held = b.stableDays != null ? `held ${b.stableDays}d` : 'stable';
+  // the beer moves to conditioning. Conditioning is TIME-based (weeks for a lager),
+  // tracked as a countdown; when it elapses the beer is honestly READY TO KEG.
+  if (b.readyToKeg) {
     const bf = b.bfConditioned ? ' · Brewfather ✓' : '';
-    return { headline: 'CONDITIONING', sub: `fermentation complete · terminal gravity ${held}${bf}`, color: t.green };
+    return { headline: 'READY TO KEG', sub: `conditioned ${b.conditioningDaysElapsed ?? ''}d — ready to package${bf}`, color: t.green };
+  }
+  if (b.terminalConfirmed) {
+    const bf = b.bfConditioned ? ' · Brewfather ✓' : '';
+    // show the conditioning countdown if we resolved a target, else just the state
+    const sub = (b.conditionDays != null && b.conditioningDaysElapsed != null)
+      ? `conditioning ${Math.max(0, Math.floor(b.conditioningDaysElapsed))}/${b.conditionDays}d${bf}`
+      : `fermentation complete · conditioning${bf}`;
+    return { headline: 'CONDITIONING', sub, color: t.cyan };
   }
   // At FG and flat, but hasn't held the full window yet — still confirming. A
   // dry-hopped beer needs 6d (hop creep can restart fermentation) vs 3d clean.

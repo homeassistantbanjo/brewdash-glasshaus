@@ -102,6 +102,20 @@ export function computeDerived(t, now = 0) {
   const requiredStableDays = t.dryHopped ? 6 : 3;
   const terminalConfirmed = stableDays != null && stableDays >= requiredStableDays;
 
+  // --- CONDITIONING countdown (time-based, NOT gravity) -----------------------
+  // Once fermentation confirms terminal, the beer conditions before it's ready to
+  // keg. The clock starts when fermentation FINISHED = stableSinceMs + the required
+  // window (the instant terminalConfirmed flipped). conditionDays is resolved by
+  // the brewfather container from BF profile steps / yeast type / style; we just
+  // count down. Deliberately independent of setpoints, so no clash with the ferm
+  // program. readyToKeg is the honest "packaging-readiness" milestone.
+  const conditionDays = n(t.conditionDays);        // target, from Brewfather facts
+  const fermentEndedMs = stableSinceMs != null ? stableSinceMs + requiredStableDays * 86_400_000 : null;
+  const conditioningDaysElapsed = (terminalConfirmed && fermentEndedMs != null)
+    ? round((now - fermentEndedMs) / 86_400_000, 1) : null;
+  const readyToKeg = (terminalConfirmed && conditionDays != null && conditioningDaysElapsed != null)
+    ? conditioningDaysElapsed >= conditionDays : false;
+
   // --- alert conditions (severity: problem | warning | milestone) ---
   // GRAVITY-based alerts require a batch actually ASSIGNED to this tank (OG present).
   // Without that, any Tilt reading is either absent or BORROWED from another tank's
@@ -124,7 +138,9 @@ export function computeDerived(t, now = 0) {
     alerts.push({ key: 'signal_lost', severity: 'warning', label: 'TILT SIGNAL LOST' });
   // confirmed-terminal is a stronger, better milestone than bare near-terminal:
   // gravity has HELD stable for the required window (3d, or 6d dry-hopped).
-  if (hasBatch && terminalConfirmed)
+  if (hasBatch && readyToKeg)
+    alerts.push({ key: 'ready_to_keg', severity: 'milestone', label: 'READY TO KEG' });
+  else if (hasBatch && terminalConfirmed)
     alerts.push({ key: 'terminal_confirmed', severity: 'milestone', label: `TERMINAL ${stableDays}d STABLE` });
   else if (hasBatch && gravity != null && fg != null && (gravity - fg) <= NEAR_TERMINAL_SG)
     alerts.push({ key: 'approaching_terminal', severity: 'milestone', label: 'NEAR TERMINAL' });
@@ -136,6 +152,8 @@ export function computeDerived(t, now = 0) {
     projectedFgReach, tiltProbeDeltaF, gravityAgeMin, fermentationStarted, activelyFermenting, alerts,
     // gravity stability (readiness signal)
     isStableNow, stableDays, terminalConfirmed, requiredStableDays,
+    // conditioning countdown (time-based; target resolved from Brewfather facts)
+    conditionDays, conditioningDaysElapsed, readyToKeg,
   };
 }
 

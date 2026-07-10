@@ -304,6 +304,12 @@ export interface ActiveBatch {
   dryHop: boolean;
   /** the runner has auto-advanced this batch to Conditioning in Brewfather */
   bfConditioned: boolean;
+  /** conditioning target in days (BF profile steps / yeast type / style) */
+  conditionDays: number | null;
+  /** days elapsed since fermentation finished (conditioning countdown) */
+  conditioningDaysElapsed: number | null;
+  /** conditioning countdown elapsed → honest packaging-readiness milestone */
+  readyToKeg: boolean;
 
   /** raw gravity/temp readings for inline sparklines, oldest→newest.
    *  Sourced from all_batches_data.readings[] (per-Tilt). */

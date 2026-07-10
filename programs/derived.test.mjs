@@ -81,6 +81,28 @@ r = computeDerived({ gravity:1.011, og:1.050, expectedFg:1.010, beerTempF:67, pr
   stableSinceMs: NOW - 4*86400000, dryHopped:true }, NOW);
 ok('dry-hopped: 4d NOT enough (needs 6)', r.terminalConfirmed===false && r.requiredStableDays===6);
 
+// CONDITIONING countdown: terminal confirmed 3d ago, 7d target → mid-conditioning.
+// stableSince 5d ago: ferment finished at stableSince+3d (2d ago) → 2d conditioned.
+r = computeDerived({ gravity:1.011, og:1.050, expectedFg:1.010, beerTempF:67, probeTempF:67,
+  setpointF:67, gravity24hDeltaPts:-0.3, gravity8hMaxSg:1.012, gravityAgeMin:1,
+  stableSinceMs: NOW - 5*86400000, conditionDays:7 }, NOW);
+ok('conditioning: ~2d elapsed', Math.round(r.conditioningDaysElapsed)===2);
+ok('conditioning: NOT ready to keg (2/7d)', r.readyToKeg===false);
+ok('conditioning: no ready-to-keg alert yet', !r.alerts.some(a=>a.key==='ready_to_keg'));
+
+// conditioning DONE: stableSince 12d ago, target 7 → ferment ended 9d ago ≥ 7 → ready
+r = computeDerived({ gravity:1.011, og:1.050, expectedFg:1.010, beerTempF:67, probeTempF:67,
+  setpointF:67, gravity24hDeltaPts:-0.3, gravity8hMaxSg:1.012, gravityAgeMin:1,
+  stableSinceMs: NOW - 12*86400000, conditionDays:7 }, NOW);
+ok('conditioning done → readyToKeg', r.readyToKeg===true);
+ok('ready-to-keg milestone fires', r.alerts.some(a=>a.key==='ready_to_keg'));
+
+// no conditionDays target → never readyToKeg (degrades safely)
+r = computeDerived({ gravity:1.011, og:1.050, expectedFg:1.010, beerTempF:67, probeTempF:67,
+  setpointF:67, gravity24hDeltaPts:-0.3, gravity8hMaxSg:1.012, gravityAgeMin:1,
+  stableSinceMs: NOW - 30*86400000, conditionDays:null }, NOW);
+ok('no target → not readyToKeg', r.readyToKeg===false && r.conditionDays===null);
+
 // still dropping → not stable at all
 r = computeDerived({ gravity:1.020, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
   setpointF:66, gravity24hDeltaPts:-8, gravity8hMaxSg:1.025, gravityAgeMin:0, stableSinceMs:null }, NOW);

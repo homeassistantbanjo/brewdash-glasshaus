@@ -5,7 +5,7 @@
  */
 
 import { useEntity, useHass, type EntityName } from '@hakit/core';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Tank, TankStatus, TiltDevice, GlycolLoop, BrewfatherBatch, BatchReading,
   ActiveBatch, TiltColor, CADENCE, Reading, EquipmentPower, PowerState, EnergyUsage,
@@ -18,6 +18,7 @@ import {
   ALL_TILT_COLORS, TankConfig,
 } from '../data/registry';
 import { useBreweryActions } from './useBreweryActions';
+import { BREWFATHER_URL } from '../config';
 
 // Small helper: pull a hakit entity safely (it throws if the id is unknown,
 // so we guard with a try and treat missing as "not present yet").
@@ -453,6 +454,9 @@ interface AssignmentInputs {
   terminalConfirmed: boolean;          // stable ≥ required window (3d, 6d dry-hop)
   dryHop: boolean;                     // recipe has a dry-hop step (from Brewfather)
   bfConditioned: boolean;              // runner auto-advanced BF → Conditioning
+  conditionDays: number | null;        // conditioning target (days), resolved from BF
+  conditioningDaysElapsed: number | null; // days since fermentation finished
+  readyToKeg: boolean;                 // conditioning countdown elapsed
 }
 
 function useTankAssignmentInputs(cfg: TankConfig): AssignmentInputs {
@@ -493,6 +497,9 @@ function useTankAssignmentInputs(cfg: TankConfig): AssignmentInputs {
       terminalConfirmed: a.terminalConfirmed === true,
       dryHop: a.dryHop === true,
       bfConditioned: a.bfConditioned === true,
+      conditionDays: numAttr(a.conditionDays),
+      conditioningDaysElapsed: numAttr(a.conditioningDaysElapsed),
+      readyToKeg: a.readyToKeg === true,
     };
   }, [tilt?.state, tilt?.last_changed, batch?.state, batch?.last_changed, fg?.state,
       derived?.state, derived?.attributes]);
@@ -516,6 +523,66 @@ function useSignalLostByColor(): Record<string, boolean> {
   }, [...ents.map((e) => e?.state)]);
 }
 
+/** Batches assigned to a tank but ABSENT from the HA all_batches_data feed.
+ *  The HA Brewfather integration only surfaces FERMENTING batches, so once a
+ *  batch advances to Conditioning it drops out of that sensor — and a tank that's
+ *  still holding it would look "unassigned". Here we fetch those missing batches
+ *  from the brewfather container (which sees every status via its resolveId
+ *  sweep) and return a batchKey→BrewfatherBatch map to fill the gap. Keyed by the
+ *  exact assignment string so lookup matches the resolver below. */
+function useConditioningBatchFallback(
+  wantedKeys: string[],
+  haveInFeed: Set<string>,
+): Map<string, BrewfatherBatch> {
+  const [fetched, setFetched] = useState<Map<string, BrewfatherBatch>>(() => new Map());
+  // only the keys that are wanted AND not already in the HA feed
+  const missing = wantedKeys.filter((k) => k && !haveInFeed.has(k));
+  const missingKey = missing.slice().sort().join(',');
+
+  useEffect(() => {
+    if (!missing.length) return;
+    let cancelled = false;
+    (async () => {
+      const results: Array<[string, BrewfatherBatch]> = [];
+      for (const key of missing) {
+        try {
+          const r = await fetch(`${BREWFATHER_URL}/batch/${encodeURIComponent(key)}`, {
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!r.ok) continue;
+          const j = await r.json();
+          // shape into a BrewfatherBatch (no readings — gravity is flat in
+          // conditioning, so the sparkline/history simply isn't needed here).
+          results.push([key, {
+            batchNo: Number(j.batchNo ?? 0),
+            name: String(j.name ?? 'Unknown'),
+            status: String(j.status ?? ''),
+            measuredOg: j.og != null ? Number(j.og) : (j.measured?.og != null ? Number(j.measured.og) : null),
+            fermentingStart: j.fermentingStart != null ? Number(j.fermentingStart) : null,
+            fermentingEnd: j.fermentingEnd != null ? Number(j.fermentingEnd) : null,
+            fermentingLeft: null,
+            targetTemp: null,
+            readingTiltId: null,
+            history: [],
+          }]);
+        } catch { /* leave it missing; card degrades to unassigned as before */ }
+      }
+      if (!cancelled && results.length) {
+        setFetched((prev) => {
+          const next = new Map(prev);
+          for (const [k, v] of results) next.set(k, v);
+          return next;
+        });
+      }
+    })();
+    return () => { cancelled = true; };
+    // re-run only when the SET of missing keys changes (not every render)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingKey]);
+
+  return fetched;
+}
+
 export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | null)[] } {
   const tanks = useAllTanks();
   const tilts = useLiveTilts();
@@ -524,12 +591,25 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
   const assignments = TANKS.map(useTankAssignmentInputs);
   const signalLostByColor = useSignalLostByColor();
 
+  // Batches that are assigned but not in the (Fermenting-only) HA feed — fetch
+  // them from the brewfather container so a Conditioning batch stays on its card.
+  const feedKeys = useMemo(() => {
+    const s = new Set<string>();
+    bfBatches.forEach((b) => { s.add(String(b.batchNo)); if (b.name) s.add(b.name); });
+    return s;
+  }, [bfBatches]);
+  const wantedKeys = assignments.map((a) => {
+    const k = a.batchSel;
+    return k && !['', 'none', 'None', 'unknown', 'unavailable'].includes(k) ? k : '';
+  }).filter(Boolean);
+  const fallbackBatches = useConditioningBatchFallback(wantedKeys, feedKeys);
+
   // Pure map over already-read values — no hooks in this callback.
   const batches = tanks.map((tank, i) => {
     const { tiltSel, batchSel, expectedFg, assignedAt,
       fermentationStarted, projectedFgReach, paceVsSchedule, alerts: tankAlerts,
       gravityDropFromPeak, tiltGravityAgeMin, stableDays, terminalConfirmed,
-      dryHop, bfConditioned } = assignments[i];
+      dryHop, bfConditioned, conditionDays, conditioningDaysElapsed, readyToKeg } = assignments[i];
 
     // "None"/"none" (either casing) both mean "no Tilt assigned" — the HA
     // helper uses 'None', batch helpers use 'none'; tolerate both.
@@ -546,7 +626,9 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
       batchSel && !['', 'none', 'None', 'unknown', 'unavailable'].includes(batchSel)
         ? batchSel : null;
     const bf = cleanBatchSel
-      ? (bfBatches.find((b) => String(b.batchNo) === cleanBatchSel || b.name === cleanBatchSel) ?? null)
+      ? (bfBatches.find((b) => String(b.batchNo) === cleanBatchSel || b.name === cleanBatchSel)
+         ?? fallbackBatches.get(cleanBatchSel)   // Conditioning batch not in the HA feed
+         ?? null)
       : null;
     const joinSource: 'assigned' | 'inferred' | 'none' = bf ? 'assigned' : 'none';
 
@@ -577,6 +659,9 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
       composed.terminalConfirmed = terminalConfirmed;
       composed.dryHop = dryHop;
       composed.bfConditioned = bfConditioned;
+      composed.conditionDays = conditionDays;
+      composed.conditioningDaysElapsed = conditioningDaysElapsed;
+      composed.readyToKeg = readyToKeg;
 
       // Assemble alerts: the tank-scoped HA sensors + signal-lost (resolved via
       // the assigned Tilt color) + the app's OWN client-side suspect check (in

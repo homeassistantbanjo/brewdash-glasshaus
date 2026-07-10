@@ -263,6 +263,9 @@ export function composeBatch(
     terminalConfirmed: false,
     dryHop: false,
     bfConditioned: false,
+    conditionDays: null,
+    conditioningDaysElapsed: null,
+    readyToKeg: false,
 
     verification: verifyAssignment(beerTemp.value, tank.probeTemp.value, now),
   };

@@ -45,7 +45,16 @@ async function bfFacts(batchKey) {
     });
     if (!r.ok) throw new Error(`brewfather HTTP ${r.status}`);
     const j = await r.json();
-    const facts = { status: j.status ?? null, dryHop: !!j.dryHop };
+    const facts = {
+      status: j.status ?? null,
+      dryHop: !!j.dryHop,
+      conditionDays: Number.isFinite(Number(j.conditionDays)) ? Number(j.conditionDays) : null,
+      conditionSource: j.conditionSource ?? null,
+      // display fields so the runner keeps computing once the batch leaves the
+      // HA (Fermenting-only) feed — see the og fallback in deriveTank.
+      og: Number.isFinite(Number(j.og)) ? Number(j.og) : null,
+      fermentingStart: Number.isFinite(Number(j.fermentingStart)) ? Number(j.fermentingStart) : null,
+    };
     _bfFactsCache.set(batchKey, { at: Date.now(), facts });
     return facts;
   } catch (e) {
@@ -300,8 +309,15 @@ async function deriveTank(tankId, by) {
   const batch = batchSel
     ? bfData.find((b) => String(b.batchNo) === batchSel || b.name === batchSel) || null
     : null;
-  const og = batch?.measuredOg != null ? Number(batch.measuredOg) : null;
-  const fermentingStartMs = batch?.fermentingStart ? Date.parse(batch.fermentingStart) : null;
+  // brewfather-container facts (dryHop, status, conditionDays + og/fermentingStart
+  // fallbacks). Fetched here so og/start can fall back to it — the HA feed only
+  // carries FERMENTING batches, so once a batch conditions the HA `batch` is null
+  // and we'd otherwise lose og → stop computing terminal/conditioning entirely.
+  const facts = batchSel ? await bfFacts(batchSel) : null;
+  const og = batch?.measuredOg != null ? Number(batch.measuredOg)
+    : (facts?.og != null ? facts.og : null);
+  const fermentingStartMs = batch?.fermentingStart ? Date.parse(batch.fermentingStart)
+    : (facts?.fermentingStart != null ? facts.fermentingStart : null);
 
   const gravity8hMaxSg = roll8hMax(tankId, gravity); // (also fills the 24h window)
 
@@ -354,7 +370,7 @@ async function deriveTank(tankId, by) {
   // named "...pale..." — real truth is worth the (cached) sidecar call. Raises the
   // terminal-confirmation window to 6d for hop creep. Null facts (BF_URL unset or
   // fetch failed) → dryHop:false, so we never HOLD a beer we can't verify.
-  const facts = batchSel ? await bfFacts(batchSel) : null;
+  // (facts is fetched once, earlier, right after batch resolution.)
   const dryHopped = !!facts?.dryHop;
 
   const d = computeDerived({
@@ -370,6 +386,7 @@ async function deriveTank(tankId, by) {
     prevLatched,
     stableSinceMs: st.stableSinceMs,
     dryHopped,
+    conditionDays: facts?.conditionDays ?? null,
   }, Date.now());
 
   // maintain state, and PERSIST any change to the HA helpers (survives reboots).
