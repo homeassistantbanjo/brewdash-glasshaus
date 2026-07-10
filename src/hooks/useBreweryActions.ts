@@ -70,6 +70,15 @@ export function useBreweryActions() {
       await callQuiet('input_number', 'set_value', `input_number.${t}_program_phase`, { value: 0 });
       await callQuiet('input_datetime', 'set_datetime', `input_datetime.${t}_program_phase_started`, { datetime: new Date().toISOString() });
     },
+    // Write a Claude-generated (+ edited) plan JSON to input_text.tank_N_program_plan
+    // and set the program to 'Generated' so the runner picks it up. Phase reset so it
+    // starts from the top. The plan is per-batch, reboot-proof (input_text).
+    setGeneratedPlan: async (t: string, planJson: string) => {
+      await callQuiet('input_text', 'set_value', `input_text.${t}_program_plan`, { value: planJson });
+      await call('input_select', 'select_option', `input_select.${t}_program`, { option: 'Generated' }, `${label(t)} → generated ferm plan`);
+      await callQuiet('input_number', 'set_value', `input_number.${t}_program_phase`, { value: 0 });
+      await callQuiet('input_datetime', 'set_datetime', `input_datetime.${t}_program_phase_started`, { datetime: new Date().toISOString() });
+    },
     // Stop/cancel: back to manual (program None). Setpoint stays where it is.
     cancelProgram: (t: string) =>
       call('input_select', 'select_option', `input_select.${t}_program`, { option: 'None' }, `${label(t)} program cancelled`),

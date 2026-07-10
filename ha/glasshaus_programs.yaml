@@ -23,6 +23,7 @@ input_select:
       - "Kveik — warm & fast"
       - "Cold crash only"
       - "Custom"
+      - "Generated"          # Claude-generated + edited plan (JSON in input_text below)
   tank_2_program:
     <<: *program_opts
     name: Tank 2 Program
@@ -68,7 +69,8 @@ input_button:
     name: Tank 3 Confirm Cold Crash
     icon: mdi:snowflake-alert
 
-# Optional per-batch overrides could be added later (ramp step/interval/target/
-# cleanup hours) as more input_number helpers; the container falls back to the
-# preset defaults when they're absent. Custom-program JSON would live in an
-# input_text.tank_N_program_custom (future — builder UI writes it).
+# The Claude-GENERATED (+ hand-edited) fermentation plan is TOO BIG for input_text
+# (HA caps it at 255 chars; a full plan is ~540). Instead the plan lives in the
+# ATTRIBUTES of sensor.tank_N_program_plan (no size limit): the plan editor writes
+# it via the HA REST API, and the programs container RE-WRITES it every tick (like
+# sensor.tank_N_derived) so it survives an HA restart. No helper needed here.

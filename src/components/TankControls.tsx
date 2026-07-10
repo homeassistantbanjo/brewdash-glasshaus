@@ -3,6 +3,7 @@ import { useEntity, type EntityName } from '@hakit/core';
 import { theme, hexA, stateColor } from '../theme/tokens';
 import { useBreweryActions } from '../hooks/useBreweryActions';
 import { useBrewfatherBatches } from '../hooks/useBrewery';
+import { FermPlanEditor } from './FermPlanEditor';
 import { Tank } from '../types/domain';
 
 // Fallbacks used ONLY until the helper's live options resolve. The real option
@@ -51,6 +52,7 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
   const programOptions = useOptions(`input_select.${tank.id}_program`);
   const curProgram = cur(`input_select.${tank.id}_program`);
   const programStatus = useEntityAttrs(`sensor.${tank.id}_program_status`);
+  const [planEditor, setPlanEditor] = useState(false);
   const running = !!curProgram && curProgram !== 'None';
   const awaitingConfirm = programStatus?.awaitingConfirm === true;
 
@@ -85,6 +87,16 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
             <>
               <Pills options={programOptions} active={curProgram}
                 onPick={(v) => (v === 'None' ? a.cancelProgram(tank.id) : a.setProgram(tank.id, v))} wrap />
+              {/* Claude-generated, strain+flavor-aware plan (edit before it runs).
+                  Needs an assigned batch to read the yeast from Brewfather. */}
+              {curBatch && !['', 'None', 'none', 'unknown'].includes(curBatch) && (
+                <button onClick={() => setPlanEditor(true)} style={{
+                  marginTop: 8, fontFamily: theme.font.mono, fontSize: 11, letterSpacing: 0.5,
+                  padding: '7px 12px', cursor: 'pointer', borderRadius: 8,
+                  border: `1px solid ${hexA(theme.color.purple, 0.6)}`, background: hexA(theme.color.purple, 0.12),
+                  color: theme.color.purple,
+                }}>✦ Suggest Ferm Plan (Claude, by yeast + flavor)</button>
+              )}
               {running && (
                 <div style={{
                   marginTop: 8, padding: '8px 10px', borderRadius: theme.radius.sm,
@@ -149,6 +161,10 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
           )}
         </Field>
       </div>
+
+      {planEditor && curBatch && (
+        <FermPlanEditor tankId={tank.id} batchNo={curBatch} onClose={() => setPlanEditor(false)} />
+      )}
     </div>
   );
 }

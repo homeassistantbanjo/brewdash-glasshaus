@@ -134,11 +134,13 @@ function resolveProgram(key, by, tankId) {
     'Cold crash only': 'coldcrash' };
   if (PRESETS[key]) return PRESETS[key];
   if (map[key]) return PRESETS[map[key]];
-  // A Claude-GENERATED (or hand-edited) plan lives as JSON in input_text.tank_N_
-  // program_plan (reboot-proof). Same shape as a preset: { label, clamp, phases }.
+  // A Claude-GENERATED (or hand-edited) plan lives in the ATTRIBUTES of
+  // sensor.tank_N_program_plan (attr `plan`) — too big for input_text's 255 cap.
+  // The editor writes it; the runner re-writes it each tick so it survives an HA
+  // restart (POSTed sensor state alone doesn't). Same shape as a preset.
   if (key === 'Generated' || key === 'Custom') {
-    const raw = by[`input_text.${tankId}_program_plan`]?.state;
-    return parsePlan(raw);
+    const planObj = by[`sensor.${tankId}_program_plan`]?.attributes?.plan;
+    return parsePlan(planObj);
   }
   return null;
 }
@@ -152,15 +154,18 @@ function resolveProgram(key, by, tankId) {
 function expectedAttenuationFor(tankId, by) {
   const key = by[`input_select.${tankId}_program`]?.state;
   if (key !== 'Generated' && key !== 'Custom') return null;
-  const plan = parsePlan(by[`input_text.${tankId}_program_plan`]?.state);
+  const plan = parsePlan(by[`sensor.${tankId}_program_plan`]?.attributes?.plan);
   return plan?.expectedAtten ?? null;
 }
 
-/** Parse + validate a stored plan JSON into a program the engine accepts. Returns
- *  null (engine skips the tank) on anything malformed — never runs a bad plan. */
+/** Parse + validate a stored plan (object from a sensor attribute, or a JSON
+ *  string) into a program the engine accepts. Returns null (engine skips the tank)
+ *  on anything malformed — never runs a bad plan. */
 function parsePlan(raw) {
   if (!raw || raw === 'unknown' || raw === 'unavailable' || raw === '') return null;
-  let p; try { p = JSON.parse(raw); } catch { return null; }
+  let p;
+  if (typeof raw === 'object') p = raw;
+  else { try { p = JSON.parse(raw); } catch { return null; } }
   if (!p || !Array.isArray(p.phases) || p.phases.length === 0) return null;
   const clamp = (p.clamp && Number.isFinite(p.clamp.minF) && Number.isFinite(p.clamp.maxF))
     ? { minF: p.clamp.minF, maxF: p.clamp.maxF }
@@ -358,7 +363,24 @@ async function deriveTank(tankId, by) {
       attributes: { friendly_name: `${tankId} derived`, tank: tankId, ...d },
     }),
   }).catch((e) => console.error(`[${tankId}] derived write failed:`, e.message));
+
+  // PERSIST the generated ferm plan across HA restarts: POSTed sensor STATE is lost
+  // on an HA restart, but the runner re-writes it here every tick from the plan it
+  // last saw (in-memory generatedPlans), so it comes back within one tick. The
+  // editor's initial write seeds generatedPlans via the state we read this tick.
+  const liveplan = by[`sensor.${tankId}_program_plan`]?.attributes?.plan;
+  if (liveplan) generatedPlans.set(tankId, liveplan);           // remember what HA has
+  const rememberedPlan = generatedPlans.get(tankId);
+  if (rememberedPlan && !liveplan) {                            // HA lost it (restart) → restore
+    await fetch(`${HA_URL}/api/states/sensor.${tankId}_program_plan`, {
+      method: 'POST', headers: H,
+      body: JSON.stringify({ state: rememberedPlan.label || 'generated plan',
+        attributes: { friendly_name: `${tankId} program plan`, tank: tankId, plan: rememberedPlan } }),
+    }).catch(() => {});
+  }
 }
+// in-memory mirror of each tank's generated plan (for HA-restart re-seeding)
+const generatedPlans = new Map();
 
 async function tickAll() {
   try {
