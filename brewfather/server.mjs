@@ -9,12 +9,12 @@
 //   measuredMashPh (0-14), measuredBoilSize/BatchSize/BottlingSize/KettleSize (L),
 //   status. NOT writable: notes, arbitrary readings.
 //
-// Config via env (NEVER git): BF_USERID, BF_APIKEY, [PORT=8092], [ALLOW_ORIGIN=*].
+// Config via env (NEVER git): BF_USERID, BF_APIKEY, [PORT=8093], [ALLOW_ORIGIN=*].
 import { createServer } from 'node:http';
 
 const BF_USERID = required('BF_USERID');
 const BF_APIKEY = required('BF_APIKEY');
-const PORT = Number(process.env.PORT || 8092);
+const PORT = Number(process.env.PORT || 8093);
 const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || '*';
 const BF = 'https://api.brewfather.app/v2';
 const AUTH = 'Basic ' + Buffer.from(`${BF_USERID}:${BF_APIKEY}`).toString('base64');

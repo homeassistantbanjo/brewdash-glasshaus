@@ -22,3 +22,8 @@ dist
 
 # Brewfather API creds for local testing (never commit)
 .bf-creds
+
+# local audit temp files
+ha_*.json
+st.json
+lb.json

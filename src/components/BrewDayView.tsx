@@ -15,10 +15,11 @@ interface BdBatch { _id: string; batchNo: number; name: string; status: string }
 
 type Draft = Record<string, string>;
 const FIELDS: { key: string; label: string; unit: string; step: string; hint?: string }[] = [
+  // FG is intentionally NOT here — it's a fermentation-stage measurement that
+  // belongs on the Tanks panel, not brew day (Planning/Brewing only).
   { key: 'preBoilGravity', label: 'Pre-Boil Gravity', unit: 'SG', step: '0.001' },
   { key: 'postBoilGravity', label: 'Post-Boil Gravity', unit: 'SG', step: '0.001' },
   { key: 'og', label: 'Original Gravity (OG)', unit: 'SG', step: '0.001' },
-  { key: 'fg', label: 'Final Gravity (FG)', unit: 'SG', step: '0.001' },
   { key: 'mashPh', label: 'Mash pH', unit: 'pH', step: '0.01' },
   { key: 'boilSizeGal', label: 'Pre-Boil Volume', unit: 'gal', step: '0.1' },
   { key: 'batchSizeGal', label: 'Into Fermenter', unit: 'gal', step: '0.1' },

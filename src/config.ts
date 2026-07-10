@@ -38,6 +38,6 @@ export const HA_TOKEN =
 export const ANALYZER_URL =
   runtime.analyzerUrl || import.meta.env.VITE_ANALYZER_URL || 'http://192.168.50.118:8091';
 
-// The Brewfather write service container (brew-day measurement write-back), :8092.
+// The Brewfather write service container (brew-day measurement write-back), :8093.
 export const BREWFATHER_URL =
-  runtime.brewfatherUrl || import.meta.env.VITE_BREWFATHER_URL || 'http://192.168.50.118:8092';
+  runtime.brewfatherUrl || import.meta.env.VITE_BREWFATHER_URL || 'http://192.168.50.118:8093';
