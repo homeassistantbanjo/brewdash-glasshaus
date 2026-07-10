@@ -266,7 +266,7 @@ function PrepSection({ prep }: { prep: any }) {
           <div style={card}>
             {head(`Hops (${prep.hops.length})`)}
             {prep.hops.map((h: any, i: number) => row(
-              `${h.name}${h.time != null ? ` · ${h.time}m ${h.use}` : h.use ? ` · ${h.use}` : ''}`,
+              `${h.name}${h.alpha != null ? ` · ${h.alpha}% AA` : ''}${h.form ? ` · ${h.form}` : ''}${h.time != null ? ` · ${h.time}m ${h.use}` : h.use ? ` · ${h.use}` : ''}`,
               `${h.g != null ? h.g.toFixed(1) : '—'} g`))}
           </div>
         )}

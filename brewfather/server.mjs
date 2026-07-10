@@ -164,7 +164,7 @@ async function bfRecipePrep(batchIdOrNo) {
     name: rec.name || b.name, batchNo: b.batchNo, style: rec.style?.name || null,
     batchSizeL: num(rec.batchSize), boilSizeL: num(rec.boilSize), boilTime: num(rec.boilTime),
     fermentables: (rec.fermentables || []).map((f) => ({ name: f.name, kg: num(f.amount), type: f.type })),
-    hops: (rec.hops || []).map((h) => ({ name: h.name, g: num(h.amount), use: h.use, time: num(h.time) })),
+    hops: (rec.hops || []).map((h) => ({ name: h.name, g: num(h.amount), use: h.use, time: num(h.time), alpha: num(h.alpha), form: h.type })),
     // water agents (salts/acids) vs other mash miscs — keep unit BF provides (g/ml)
     salts: miscs.filter((m) => m.type === 'Water Agent').map((m) => ({ name: m.name, amount: num(m.amount), unit: m.unit || 'g', use: m.use })),
     otherMiscs: miscs.filter((m) => m.type !== 'Water Agent').map((m) => ({ name: m.name, amount: num(m.amount), unit: m.unit || 'g', use: m.use, type: m.type })),
