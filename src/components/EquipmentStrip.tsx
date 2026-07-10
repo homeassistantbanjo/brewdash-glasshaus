@@ -84,10 +84,15 @@ export function EquipmentChip({ eq, showEnergy = true }: { eq: EquipmentPower; s
   );
 }
 
-export function EquipmentStrip({ equipment }: { equipment: EquipmentPower[] }) {
+export function EquipmentStrip({ equipment, excludeIds = [] }: {
+  equipment: EquipmentPower[];
+  /** device ids to omit — e.g. glycol, which the Overview draws as its own hero
+   *  tile, so a duplicate chip here would repeat state + power. */
+  excludeIds?: string[];
+}) {
   // Only plant-wide devices belong in the top strip. Controllers (id ends with
   // _controller) render on their tank's card instead — no aggregate chip.
-  const plant = equipment.filter((e) => !e.id.endsWith('_controller'));
+  const plant = equipment.filter((e) => !e.id.endsWith('_controller') && !excludeIds.includes(e.id));
   if (plant.length === 0) return null;
 
   return (

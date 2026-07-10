@@ -142,7 +142,10 @@ export function Overview() {
         padding: '10px 14px', flexShrink: 0,
         display: 'flex', alignItems: 'stretch', gap: 10,
       }}>
-        {/* glycol reservoir hero */}
+        {/* GLYCOL — the ONE glycol tile. Reservoir temp + state + demand, with a
+            footer line carrying power · cycles · runtime. Consolidated: the chiller
+            was previously drawn 3× in this strip (hero + duty panel + equip chip);
+            now it's one tile and the glycol chip is dropped from EquipmentStrip. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingRight: 12, borderRight: `1px solid ${theme.color.panelBorder}` }}>
           <span style={{ fontSize: 24, filter: cooling ? `drop-shadow(0 0 8px ${theme.color.cyan})` : 'none' }}>❄</span>
           <div>
@@ -157,33 +160,25 @@ export function Overview() {
             <div style={{ fontFamily: theme.font.sans, fontSize: 9, letterSpacing: 1, color: theme.color.textLabel, textTransform: 'uppercase', marginTop: 3 }}>
               Glycol {cooling ? '· COOLING' : '· IDLE'} · {pumpingTankIds.size || demanding.length} DEMAND{contention ? ' ⚡' : ''}
             </div>
+            {/* duty + power footer: watts · cycles/h · runtime. cycles warn-colored
+                from the single health source (monitor's glycol_short_cycle). */}
+            <div style={{
+              fontFamily: theme.font.mono, fontSize: 10, fontVariantNumeric: 'tabular-nums',
+              color: theme.color.textDim, marginTop: 4, display: 'flex', gap: 6, alignItems: 'baseline',
+            }}>
+              <span><span style={{ color: theme.color.textLabel, fontWeight: 600 }}>{glycol.powerW?.value != null ? Math.round(glycol.powerW.value) : '—'}</span>W</span>
+              <span style={{ color: theme.color.textFaint }}>·</span>
+              <span style={{ color: health.has('glycol_short_cycle') ? stateColor('warn') : theme.color.textDim }}>
+                <span style={{ fontWeight: 600 }}>{plantDiag.cycles1h ?? '—'}</span> cyc/h
+              </span>
+              <span style={{ color: theme.color.textFaint }}>·</span>
+              <span><span style={{ fontWeight: 600 }}>{plantDiag.runtime7dH != null ? plantDiag.runtime7dH.toFixed(1) : '—'}</span> h/7d</span>
+            </div>
           </div>
         </div>
-        {/* plant-wide chiller duty (shared loop, NOT per-tank): runtime + cycles.
-            Lives here next to the chiller, not duplicated on every tank card. */}
-        <div style={{
-          display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4,
-          paddingRight: 12, borderRight: `1px solid ${theme.color.panelBorder}`,
-          fontFamily: theme.font.mono, fontVariantNumeric: 'tabular-nums',
-        }}>
-          <div style={{ fontSize: 12, color: theme.color.textLabel }}>
-            <span style={{ color: theme.color.text, fontWeight: 600 }}>{plantDiag.runtime7dH != null ? plantDiag.runtime7dH.toFixed(1) : '—'}</span>
-            <span style={{ fontSize: 9, color: theme.color.textDim }}> h/7d</span>
-          </div>
-          <div style={{
-            fontSize: 12,
-            // warn coloring comes from the ONE health source (monitor's
-            // glycol_short_cycle), not a second threshold here — keeps the "bad"
-            // line consistent with the alert + push notification.
-            color: health.has('glycol_short_cycle') ? stateColor('warn') : theme.color.textLabel,
-          }}>
-            <span style={{ fontWeight: 600 }}>{plantDiag.cycles1h != null ? plantDiag.cycles1h : '—'}</span>
-            <span style={{ fontSize: 9, color: theme.color.textDim }}> cyc/h</span>
-          </div>
-          <div style={{ fontSize: 8, letterSpacing: 1, color: theme.color.textFaint, textTransform: 'uppercase' }}>Chiller duty</div>
-        </div>
-        {/* equipment chips share the same band, filling the rest of the width */}
-        <EquipmentStrip equipment={equipment} />
+        {/* equipment chips share the same band, filling the rest of the width.
+            Glycol is excluded here (it's the hero tile above) — see EquipmentStrip. */}
+        <EquipmentStrip equipment={equipment} excludeIds={['glycol']} />
       </div>
 
       {view === 'graphs' ? (

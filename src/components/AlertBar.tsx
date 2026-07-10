@@ -16,9 +16,14 @@ export function AlertBar({ tanks, batches, health, onFocus }: {
   health?: PlantHealth;
   onFocus?: (tankId: string) => void;
 }) {
-  // flatten (tank, alert) pairs, most-severe first (batch.alerts is pre-sorted)
+  // flatten (tank, alert) pairs, most-severe first (batch.alerts is pre-sorted).
+  // ONLY actionable alerts belong in an alert bar — 'milestone' alerts (TERMINAL,
+  // NEAR TERMINAL, READY TO KEG) are GOOD news and already show on the tank card's
+  // stage badge; surfacing them here reads as a fault and clutters the bar.
   const items = batches.flatMap((b, i) =>
-    (b?.alerts ?? []).map((a) => ({ tank: tanks[i], alert: a })),
+    (b?.alerts ?? [])
+      .filter((a) => a.severity === 'problem' || a.severity === 'warning')
+      .map((a) => ({ tank: tanks[i], alert: a })),
   );
   const healthAlerts = health?.alerts ?? [];
   // container-dead heartbeat: surfaced as a synthetic critical health chip
