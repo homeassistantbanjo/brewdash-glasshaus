@@ -529,12 +529,15 @@ export function alertColor(s: AlertSeverity): string {
 function readiness(b: ActiveBatch, programPhase: string | null): { headline: string; sub: string; color: string } {
   const t = theme.color;
   if (programPhase) return { headline: programPhase.toUpperCase(), sub: 'running fermentation program', color: t.cyan };
-  // Gravity held flat for the full confirmation window → fermentation is DONE.
-  // This is the "you're conditioning now" state the brewer cares about.
+  // Gravity held flat for the full confirmation window → FERMENTATION is DONE, so
+  // the beer moves to conditioning. NOT "ready to package" — conditioning/lagering
+  // takes time (weeks for a lager); packaging-readiness is a separate, later
+  // milestone we don't track from gravity. Say only what's true: fermentation
+  // complete, now conditioning.
   if (b.terminalConfirmed) {
-    const held = b.stableDays != null ? `stable ${b.stableDays}d` : 'stable';
-    const bf = b.bfConditioned ? ' · Brewfather → Conditioning ✓' : '';
-    return { headline: 'CONDITIONING', sub: `terminal gravity reached · ${held} · ready to package${bf}`, color: t.green };
+    const held = b.stableDays != null ? `held ${b.stableDays}d` : 'stable';
+    const bf = b.bfConditioned ? ' · Brewfather ✓' : '';
+    return { headline: 'CONDITIONING', sub: `fermentation complete · terminal gravity ${held}${bf}`, color: t.green };
   }
   // At FG and flat, but hasn't held the full window yet — still confirming. A
   // dry-hopped beer needs 6d (hop creep can restart fermentation) vs 3d clean.
