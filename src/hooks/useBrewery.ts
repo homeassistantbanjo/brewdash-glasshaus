@@ -297,6 +297,10 @@ export interface PlantHealth {
   alerts: HealthAlert[];
   /** epoch ms of the last heartbeat; stale → programs container may be down */
   heartbeatAgeMin: number | null;
+  /** true if a health alert with this key is currently active. Lets display
+   *  surfaces (chiller-duty panel, Insights chip) derive their 'warn' state from
+   *  the ONE source of truth instead of recomputing their own thresholds. */
+  has: (key: string) => boolean;
 }
 export function useHealth(): PlantHealth {
   const e = safeEntity(PLANT.health);
@@ -309,11 +313,13 @@ export function useHealth(): PlantHealth {
       entityId: x.entityId ? String(x.entityId) : undefined,
     }));
     const hb = a.heartbeat ? Date.parse(a.heartbeat) : NaN;
+    const keys = new Set(alerts.map((x) => x.key));
     return {
       critical: Number(a.critical) || 0,
       warnings: Number(a.warnings) || 0,
       alerts,
       heartbeatAgeMin: Number.isFinite(hb) ? Math.round((Date.now() - hb) / 60000) : null,
+      has: (k: string) => keys.has(k),
     };
   }, [e?.state, e?.last_changed, e?.attributes]);
 }

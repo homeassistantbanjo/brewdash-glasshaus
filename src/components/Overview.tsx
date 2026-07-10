@@ -172,7 +172,10 @@ export function Overview() {
           </div>
           <div style={{
             fontSize: 12,
-            color: plantDiag.cycles1h != null && plantDiag.cycles1h >= 6 ? stateColor('warn') : theme.color.textLabel,
+            // warn coloring comes from the ONE health source (monitor's
+            // glycol_short_cycle), not a second threshold here — keeps the "bad"
+            // line consistent with the alert + push notification.
+            color: health.has('glycol_short_cycle') ? stateColor('warn') : theme.color.textLabel,
           }}>
             <span style={{ fontWeight: 600 }}>{plantDiag.cycles1h != null ? plantDiag.cycles1h : '—'}</span>
             <span style={{ fontSize: 9, color: theme.color.textDim }}> cyc/h</span>
