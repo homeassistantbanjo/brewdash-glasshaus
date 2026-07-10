@@ -303,7 +303,7 @@ async function generatePlan(batchIdOrNo, intent, notes) {
   // ensure expectedAtten present (fall back to the strain spec) + gate any cold crash
   if (plan.expectedAtten == null && yeasts[0]?.attenuation != null) plan.expectedAtten = yeasts[0].attenuation;
   for (const ph of (plan.phases || [])) if (ph.kind === 'coldCrash') ph.requiresConfirm = true;
-  return { ...plan, batchNo: b.batchNo, yeast: yeasts[0]?.name || null };
+  return { ...plan, batchNo: facts.batchNo, yeast: yeasts[0]?.name || null };
 }
 
 createServer((req, res) => {
