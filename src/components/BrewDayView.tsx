@@ -110,19 +110,31 @@ export function BrewDayView() {
         </div>
       ) : (
         <>
-          {/* batch selector */}
+          {/* batch selector — labeled so it's clearly a picker even with one batch.
+              Shows the RECIPE name (what you recognize) for the loaded batch; the
+              batch's own name is often generic ("Batch"). */}
+          <div style={{ fontFamily: theme.font.mono, fontSize: 11, letterSpacing: 1.5, color: theme.color.textFaint, textTransform: 'uppercase' }}>
+            ⌐ Select Batch {active.length > 1 ? `(${active.length} in Planning/Brewing)` : ''}
+          </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {active.map((b) => {
               const on = String(b.batchNo) === selId;
+              // for the selected batch we know its recipe name (from the prep fetch)
+              const label = on && prep?.name ? prep.name : (b.name && b.name !== 'Batch' ? b.name : `Batch #${b.batchNo}`);
               return (
                 <button key={b.batchNo} onClick={() => { setBatchId(String(b.batchNo)); setDraft({}); }}
                   style={{
-                    fontFamily: theme.font.mono, fontSize: 12, padding: '7px 12px', cursor: 'pointer', clipPath: clip,
-                    borderRadius: clip ? 0 : 8,
+                    fontFamily: theme.font.mono, fontSize: 13, padding: '9px 14px', cursor: 'pointer', clipPath: clip,
+                    borderRadius: clip ? 0 : 8, display: 'flex', alignItems: 'center', gap: 7,
                     border: `1px solid ${on ? theme.color.cyan : theme.color.panelBorder}`,
-                    background: on ? hexA(theme.color.cyan, 0.15) : theme.color.inset,
+                    background: on ? hexA(theme.color.cyan, 0.18) : theme.color.inset,
                     color: on ? theme.color.cyan : theme.color.textDim,
-                  }}>{b.name} <span style={{ opacity: 0.6 }}>· {b.status}</span></button>
+                    boxShadow: on ? theme.glow(theme.color.cyan, 0.25) : 'none',
+                  }}>
+                  <span>{on ? '●' : '○'}</span>
+                  {label}
+                  <span style={{ opacity: 0.55, fontSize: 10 }}>#{b.batchNo} · {b.status}</span>
+                </button>
               );
             })}
           </div>
