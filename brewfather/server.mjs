@@ -37,6 +37,23 @@ const sendJson = (res, code, obj) =>
 const galToL = (g) => g * 3.785411784;
 const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
+// Tiny TTL cache for READ calls, keyed by a string. Stops rapid view-switching
+// (BrewDayView unmounts/remounts on each Tanks↔Brew Day flip → refetch) from
+// spamming the Brewfather API. 60s is imperceptible for a recipe; a PATCH clears
+// the affected batch's entries so a write shows fresh immediately.
+const READ_TTL = Number(process.env.READ_TTL_SEC || 60) * 1000;
+const _reads = new Map(); // key → { at, val }
+async function cached(key, fn) {
+  const hit = _reads.get(key);
+  if (hit && Date.now() - hit.at < READ_TTL) return hit.val;
+  const val = await fn();
+  _reads.set(key, { at: Date.now(), val });
+  return val;
+}
+function invalidate(batchId) {
+  for (const k of _reads.keys()) if (k.includes(String(batchId))) _reads.delete(k);
+}
+
 // Map the panel's payload (user units) → Brewfather metric field set. Only include
 // fields the user actually provided (BF does a shallow merge; omit = leave as-is).
 function toBrewfatherPatch(body) {
@@ -110,6 +127,7 @@ async function bfPatchBatch(batchIdOrNo, patch) {
 // the key works). Returns just the measured/status fields we care about.
 async function bfGetBatch(batchIdOrNo) {
   const batchId = await resolveId(batchIdOrNo);
+  return cached(`get:${batchId}`, async () => {
   const r = await fetch(`${BF}/batches/${encodeURIComponent(batchId)}`, { headers: { Authorization: AUTH } });
   if (!r.ok) throw new Error(`Brewfather HTTP ${r.status}`);
   const b = await r.json();
@@ -127,6 +145,7 @@ async function bfGetBatch(batchIdOrNo) {
       bottlingSizeGal: Lto(b.measuredBottlingSize),
     },
   };
+  });
 }
 
 // Brew-day batches: Planning + Brewing (the statuses HA's integration doesn't
@@ -151,6 +170,7 @@ async function bfBrewDayBatches() {
 // to the computed adjustment volumes.
 async function bfRecipePrep(batchIdOrNo) {
   const id = await resolveId(batchIdOrNo);
+  return cached(`recipe:${id}`, async () => {
   const r = await fetch(`${BF}/batches/${encodeURIComponent(id)}?complete=true`, { headers: { Authorization: AUTH } });
   if (!r.ok) throw new Error(`Brewfather HTTP ${r.status}`);
   const b = await r.json();
@@ -171,6 +191,7 @@ async function bfRecipePrep(batchIdOrNo) {
     water: { mashL, spargeL },
     mashSteps: (rec.mash?.steps || []).map((s) => ({ name: s.name, tempC: num(s.stepTemp), min: num(s.stepTime) })),
   };
+  });
 }
 
 createServer((req, res) => {
@@ -213,8 +234,11 @@ createServer((req, res) => {
       const patch = toBrewfatherPatch(parsed);
       if (!Object.keys(patch).length) return sendJson(res, 400, { error: 'no valid fields to write' });
       try {
-        const result = await bfPatchBatch(decodeURIComponent(patchMatch[1]), patch);
-        console.log(`[brewfather] wrote ${Object.keys(patch).join(',')} to batch ${patchMatch[1]}`);
+        const arg = decodeURIComponent(patchMatch[1]);
+        const result = await bfPatchBatch(arg, patch);
+        // clear cached reads for this batch so the write shows fresh immediately
+        try { invalidate(await resolveId(arg)); } catch { /* ignore */ }
+        console.log(`[brewfather] wrote ${Object.keys(patch).join(',')} to batch ${arg}`);
         sendJson(res, 200, { ok: true, wrote: Object.keys(patch), result });
       } catch (e) {
         console.error('[brewfather] write failed:', e.message);
