@@ -18,6 +18,10 @@ const PORT = Number(process.env.PORT || 8093);
 const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || '*';
 const BF = 'https://api.brewfather.app/v2';
 const AUTH = 'Basic ' + Buffer.from(`${BF_USERID}:${BF_APIKEY}`).toString('base64');
+// Optional: Anthropic key enables POST /fermplan (Claude-generated ferm plans).
+// Absent → the endpoint returns 501 and the UI hides the "Suggest Ferm Plan" button.
+const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
+const PLAN_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
 
 function required(k) {
   const v = process.env[k];
@@ -205,9 +209,90 @@ async function bfRecipePrep(batchIdOrNo) {
   });
 }
 
+// ---- Claude-generated fermentation plan ---------------------------------------
+// Gathers the batch's YEAST spec + style + gravities (full recipe from BF) and asks
+// Claude for a strain/style-aware temp-step plan whose advances key off REAL
+// attenuation (as % of the strain's expected attenuation), not the calendar. The
+// returned plan is a STARTING POINT the user edits before it runs. Cold crash is
+// always gated. Amounts stay SG/°F for the UI; the runner enforces the clamp.
+const PLAN_SYSTEM = `You are a master brewer designing a FERMENTATION TEMPERATURE plan for one batch,
+grounded in modern practice (Brülosophy findings, yeast-lab guidance, general craft consensus).
+
+You are given the YEAST (name, lab, type, expected attenuation %, min/max temp °C), the STYLE,
+and OG/expected FG. Design an ordered set of temperature STEPS that fits THIS yeast and style.
+
+RULES:
+- Output temps in °F. Respect the yeast's min/max temp range (converted from °C).
+- Advances key off REAL fermentation data, NOT days. Use advance type
+  "attenuationOfExpected" with pct = % OF THIS STRAIN'S expected attenuation (e.g. pct:80 means
+  80% of the strain's expected attenuation reached). Early primary steps advance mid-way; the
+  free-rise/D-rest step advances at "terminal" (gravity flat near FG). This handles slow starts.
+- Include a free-rise / diacetyl-rest step when the style/yeast benefits (most ales & lagers);
+  lagers stay cool then rise; kveik runs warm; hazy/NEIPA free-rise for biotransformation.
+- End with a conditioning hold, then a cold-crash step. The cold-crash step MUST have
+  requiresConfirm:true (the brewer tastes & confirms before crashing — never auto).
+- clamp.maxF must not exceed the yeast's max temp; for any lager, clamp.maxF <= 70.
+- Every step needs a short "why" (the reasoning shown to the brewer).
+
+Primitives: hold {tempF} | ramp {stepF, everyHours, targetF} | wait {hours} | coldCrash
+{targetF, stepF, everyHours}. Advance types: attenuationOfExpected {pct} | terminal | active |
+elapsed {hours} | confirm. Output ONLY valid JSON (no markdown, no fences), EXACTLY:
+{"summary":"<=90 chars","expectedAtten":<strain expected attenuation %>,"clamp":{"minF":N,"maxF":N},
+ "phases":[{"name":"...","kind":"hold|ramp|wait|coldCrash","tempF":N,"targetF":N,"stepF":N,
+ "everyHours":N,"hours":N,"advance":{"type":"...","pct":N,"hours":N},"requiresConfirm":bool,"why":"..."}]}`;
+
+async function generatePlan(batchIdOrNo) {
+  if (!ANTHROPIC_KEY) throw new Error('no ANTHROPIC_API_KEY set on the brewfather container');
+  const id = await resolveId(batchIdOrNo);
+  const r = await fetch(`${BF}/batches/${encodeURIComponent(id)}?complete=true`, { headers: { Authorization: AUTH } });
+  if (!r.ok) throw new Error(`Brewfather HTTP ${r.status}`);
+  const b = await r.json(); const rec = b.recipe || {};
+  const yeasts = (rec.yeasts || []).map((y) => ({
+    name: y.name, lab: y.laboratory, productId: y.productId, type: y.type, form: y.form,
+    attenuation: y.attenuation ?? y.maxAttenuation ?? null, minTempC: y.minTemp, maxTempC: y.maxTemp,
+    flocculation: y.flocculation,
+  }));
+  const facts = {
+    style: rec.style?.name || null, name: rec.name || b.name,
+    og: rec.og ?? b.estimatedOg ?? null, expectedFg: rec.fg ?? b.estimatedFg ?? null,
+    yeasts,
+  };
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: PLAN_MODEL, max_tokens: 1200, system: PLAN_SYSTEM,
+      messages: [{ role: 'user', content: `Design a fermentation plan for:\n${JSON.stringify(facts, null, 1)}` }] }),
+  });
+  const j = await res.json();
+  if (j.error) throw new Error(`${j.error.type}: ${j.error.message}`);
+  const text = (j.content?.[0]?.text ?? '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+  let plan; try { plan = JSON.parse(text); } catch { throw new Error('Claude returned unparseable plan'); }
+  // ensure expectedAtten present (fall back to the strain spec) + gate any cold crash
+  if (plan.expectedAtten == null && yeasts[0]?.attenuation != null) plan.expectedAtten = yeasts[0].attenuation;
+  for (const ph of (plan.phases || [])) if (ph.kind === 'coldCrash') ph.requiresConfirm = true;
+  return { ...plan, batchNo: b.batchNo, yeast: yeasts[0]?.name || null };
+}
+
 createServer((req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, CORS).end(); return; }
   if (req.method === 'GET' && req.url === '/health') { res.writeHead(200, CORS).end('ok'); return; }
+
+  // POST /fermplan/:id → Claude-generated fermentation plan (starting point to edit)
+  const planMatch = req.method === 'POST' && req.url?.match(/^\/fermplan\/([^/?]+)/);
+  if (planMatch) {
+    (async () => {
+      try {
+        if (!ANTHROPIC_KEY) return sendJson(res, 501, { error: 'ferm-plan generation not configured (no Anthropic key)' });
+        const plan = await generatePlan(decodeURIComponent(planMatch[1]));
+        console.log(`[brewfather] generated ferm plan for batch ${planMatch[1]} (${plan.phases?.length} steps)`);
+        sendJson(res, 200, plan);
+      } catch (e) {
+        console.error('[brewfather] fermplan failed:', e.message);
+        sendJson(res, 502, { error: e.message });
+      }
+    })();
+    return;
+  }
 
   // GET /recipe/:id → brew-day prep (grain/water/salts/hops), amounts metric
   const recipeMatch = req.method === 'GET' && req.url?.match(/^\/recipe\/([^/?]+)/);
