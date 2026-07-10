@@ -88,6 +88,27 @@ input_boolean:
     icon: mdi:beer
 
 # =============================================================================
+# GLYCOL CHILLER "running" — WATTAGE truth (the switch lies; the compressor
+# binary_sensor is dead). This template binary_sensor is the SOURCE for the three
+# history_stats above (cooling runtime, on-time, compressor cycles). It was
+# inadvertently dropped when the per-tank template block was gutted in the generic
+# refactor — but it's PLANT-WIDE, not per-tank, so it belongs here. Without it the
+# cycles/runtime sensors read frozen zeros. >200W = compressor running.
+# (unique_id matches the existing registry entry gh_glycol_running_power so the
+#  same entity_id is reused, no orphan.)
+# =============================================================================
+template:
+  - binary_sensor:
+      - name: "Glycol Chiller Running (power)"
+        unique_id: gh_glycol_running_power
+        device_class: running
+        state: >
+          {{ states('sensor.glycol_power_current_consumption') | float(0) > 200 }}
+        availability: >
+          {{ states('sensor.glycol_power_current_consumption') not in
+             ['unknown','unavailable','',none] }}
+
+# =============================================================================
 # RETIRED: the per-tank template + binary_sensor derived/alert sensors that used
 # to live here are now computed GENERICALLY for every tank by the programs
 # container (programs/derived.mjs → writes sensor.tank_N_derived). This avoided
