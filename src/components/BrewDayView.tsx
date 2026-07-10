@@ -188,12 +188,14 @@ export function BrewDayView() {
 // ---- unit conversions for the prep display -----------------------------------
 const KG_TO_LB = 2.2046226218;
 const L_TO_GAL = 0.2641720524;
-/** kg → "X lb Y oz" (how you'd weigh grain) */
+/** kg → "X lb Y oz" (how you'd weigh grain). Rounds ounces to 0.1 FIRST, then
+ *  carries into pounds, so 16.0 oz becomes +1 lb 0 oz (not "16 lb 16 oz"). */
 function kgToLbOz(kg: number | null): string {
   if (kg == null) return '—';
-  const totalOz = kg * KG_TO_LB * 16;
-  const lb = Math.floor(totalOz / 16);
-  const oz = Math.round((totalOz - lb * 16) * 10) / 10;
+  let oz = Math.round(kg * KG_TO_LB * 16 * 10) / 10; // total oz, 0.1 precision
+  let lb = Math.floor(oz / 16);
+  oz = Math.round((oz - lb * 16) * 10) / 10;
+  if (oz >= 16) { lb += 1; oz = 0; } // safety carry
   return lb > 0 ? `${lb} lb ${oz} oz` : `${oz} oz`;
 }
 const lToGal = (l: number | null) => (l == null ? '—' : `${(l * L_TO_GAL).toFixed(2)} gal`);
