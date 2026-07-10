@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useEntity, type EntityName } from '@hakit/core';
 import { theme, hexA, stateColor } from '../theme/tokens';
 import { useBreweryActions } from '../hooks/useBreweryActions';
-import { useBrewfatherBatches } from '../hooks/useBrewery';
+import { useAssignableBatches } from '../hooks/useBrewery';
 import { FermPlanEditor } from './FermPlanEditor';
 import { Tank } from '../types/domain';
 
@@ -192,14 +192,16 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function BatchPicker({ tankId, current, onPick }: {
   tankId: string; current?: string; onPick: (batchNo: string) => void;
 }) {
-  const bf = useBrewfatherBatches();
-  // assignable = in a vessel: Fermenting or Conditioning
-  const assignable = bf.filter((b) => b.status === 'Fermenting' || b.status === 'Conditioning');
+  // assignable list comes from the brewfather CONTAINER (/assignable), which sees
+  // Fermenting + Conditioning across all statuses — NOT the HA feed, which only
+  // has Fermenting and goes empty once every batch conditions (that emptied the
+  // picker). Container is also the source of the real beer name.
+  const assignable = useAssignableBatches();
   const opts = assignable.map((b) => ({ no: String(b.batchNo), name: b.name, status: b.status }));
   // if current assignment isn't in the assignable set (e.g. Completed), surface it
   const curNo = current && current !== '' && current !== 'None' && current !== 'none' ? current : null;
   if (curNo && !opts.some((o) => o.no === curNo)) {
-    const stale = bf.find((b) => String(b.batchNo) === curNo);
+    const stale = assignable.find((b) => String(b.batchNo) === curNo);
     opts.push({ no: curNo, name: stale ? `${stale.name} (${stale.status})` : `#${curNo} (gone)`, status: 'stale' });
   }
   if (!opts.length) {

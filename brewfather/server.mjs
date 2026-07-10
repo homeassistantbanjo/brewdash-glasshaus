@@ -107,9 +107,15 @@ let _statusCache = new Map();  // status → { at, list }
 async function bfBatchesByStatus(status) {
   const hit = _statusCache.get(status);
   if (hit && Date.now() - hit.at < 60_000) return hit.list;
-  const r = await fetch(`${BF}/batches?status=${status}&limit=50&include=batchNo,name,status`, { headers: { Authorization: AUTH } });
+  // include recipe.name — the batch's own `name` is the generic "Batch"; the real
+  // beer name lives on the recipe. Normalize so `name` is always the beer name.
+  const r = await fetch(`${BF}/batches?status=${status}&limit=50&include=batchNo,name,status,recipe.name`, { headers: { Authorization: AUTH } });
   if (!r.ok) throw new Error(`Brewfather list (${status}) HTTP ${r.status}`);
-  const list = await r.json();
+  const raw = await r.json();
+  const list = raw.map((b) => ({
+    _id: b._id, batchNo: b.batchNo, status: b.status,
+    name: (b.recipe && b.recipe.name) || b.name || `#${b.batchNo}`,
+  }));
   _statusCache.set(status, { at: Date.now(), list });
   return list;
 }
@@ -431,6 +437,18 @@ createServer((req, res) => {
   if (recipeMatch) {
     bfRecipePrep(decodeURIComponent(recipeMatch[1]))
       .then((p) => sendJson(res, 200, p))
+      .catch((e) => sendJson(res, 502, { error: e.message }));
+    return;
+  }
+
+  // GET /assignable → batches that live IN a fermenter (Fermenting + Conditioning),
+  // the tank-view batch picker's source. Must come from HERE not the HA feed: the
+  // HA Brewfather integration only surfaces FERMENTING batches, so once every batch
+  // conditions the HA feed is empty and the picker had nothing to offer. This sees
+  // all statuses. Names are the real recipe name (not "Batch").
+  if (req.method === 'GET' && req.url?.startsWith('/assignable')) {
+    Promise.all([bfBatchesByStatus('Fermenting'), bfBatchesByStatus('Conditioning')])
+      .then(([f, c]) => sendJson(res, 200, { batches: [...f, ...c] }))
       .catch((e) => sendJson(res, 502, { error: e.message }));
     return;
   }

@@ -281,6 +281,34 @@ export function useInsight(): Insight | null {
   }, [e?.state, e?.last_changed, e?.attributes]);
 }
 
+/** Batches assignable to a fermenter (Fermenting + Conditioning), fetched from the
+ *  brewfather container's /assignable — the tank picker's source of truth. NOT the
+ *  HA feed: that only carries Fermenting batches, so once everything conditions the
+ *  picker would be empty. Polled; names are the real recipe name. */
+export interface AssignableBatch { batchNo: number; name: string; status: string; }
+export function useAssignableBatches(): AssignableBatch[] {
+  const [list, setList] = useState<AssignableBatch[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch(`${BREWFATHER_URL}/assignable`, { signal: AbortSignal.timeout(8000) });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (!cancelled && Array.isArray(j.batches)) {
+          setList(j.batches.map((b: any) => ({
+            batchNo: Number(b.batchNo), name: String(b.name ?? `#${b.batchNo}`), status: String(b.status ?? ''),
+          })));
+        }
+      } catch { /* keep last good list */ }
+    };
+    load();
+    const t = setInterval(load, 60_000);   // 1/min — well under BF's rate limit
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
+  return list;
+}
+
 /** Plant/component HEALTH (from the programs container's sensor.glasshaus_health):
  *  infra observability — sensor staleness, Kasa/Inkbird disconnects, glycol health,
  *  temp-controller liveness. Separate from per-tank BEER alerts. null-safe. */
