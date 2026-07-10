@@ -43,15 +43,26 @@ input_select:
     <<: *tilt_opts
     name: Tank 3 Tilt
 
-  tank_1_batch: &batch_opts
+  # NOTE: tank_N_batch is NOT an input_select — see input_text below. A package
+  # input_select re-asserts its hardcoded `options:` on every HA restart, which
+  # forced the saved selection to reset when the selected batch wasn't in that
+  # static seed → the "tanks lose their batch on reboot" bug. Batch is dynamic
+  # (any beer, any tank, yearly repeats), so it's stored as FREE TEXT instead.
+
+# Batch assignment = the Brewfather batch NUMBER as free text. No options list, so
+# HA can never reset it on restart. The app's picker builds the choosable beers
+# live from Brewfather (Fermenting + Conditioning) and writes the chosen number;
+# display resolves the number back to the live batch. Empty = unassigned.
+input_text:
+  tank_1_batch: &batch_txt
     name: Tank 1 Batch
     icon: mdi:glass-mug-variant
-    options: ["None"]        # seed only — app auto-syncs from Brewfather fermenting set
+    max: 32
   tank_2_batch:
-    <<: *batch_opts
+    <<: *batch_txt
     name: Tank 2 Batch
   tank_3_batch:
-    <<: *batch_opts
+    <<: *batch_txt
     name: Tank 3 Batch
 
 input_number:

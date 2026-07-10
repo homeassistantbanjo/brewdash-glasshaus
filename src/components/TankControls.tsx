@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useEntity, type EntityName } from '@hakit/core';
 import { theme, hexA, stateColor } from '../theme/tokens';
 import { useBreweryActions } from '../hooks/useBreweryActions';
+import { useBrewfatherBatches } from '../hooks/useBrewery';
 import { Tank } from '../types/domain';
 
 // Fallbacks used ONLY until the helper's live options resolve. The real option
@@ -28,7 +29,6 @@ function useEntityAttrs(entityId: string): Record<string, any> | null {
 
 export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => void }) {
   const a = useBreweryActions();
-  const batchOptions = useOptions(`input_select.${tank.id}_batch`);
   // Live option lists straight from the HA helpers — never hardcoded, so a pill
   // can only ever offer a value select_option will accept. Fall back to a static
   // list only while the entity is still resolving (empty bay / first paint).
@@ -43,7 +43,7 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
   };
   const curStatus = cur(`input_select.${tank.id}_status`);
   const curTilt = cur(`input_select.${tank.id}_tilt`);
-  const curBatch = cur(`input_select.${tank.id}_batch`);
+  const curBatch = cur(`input_text.${tank.id}_batch`); // stored batchNo (free text)
 
   // fermentation program: options + current selection + live status (from the
   // programs container's sensor.tank_N_program_status). Absent until the programs
@@ -121,12 +121,8 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
         </Field>
 
         <Field label="Batch">
-          {batchOptions.length > 1 ? (
-            <Pills options={batchOptions} active={curBatch}
-              onPick={(v) => a.setBatch(tank.id, v)} wrap />
-          ) : (
-            <span style={hint}>No fermenting batches synced from Brewfather yet.</span>
-          )}
+          <BatchPicker tankId={tank.id} current={curBatch}
+            onPick={(batchNo) => a.setBatch(tank.id, batchNo)} />
         </Field>
 
         <Field label="Tilt (floating — verify by temp match)">
@@ -167,6 +163,56 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </div>
   );
+}
+
+/**
+ * Batch picker — options built LIVE from Brewfather (Fermenting + Conditioning,
+ * since you condition in the fermenter), showing beer NAMES but writing the batch
+ * NUMBER (stable id). Plus a "None" to release the tank. What's stored is just the
+ * number as free text, so it survives an HA restart (no options list to reset).
+ * If the currently-assigned batch isn't in the live set (already Completed/kegged),
+ * it's still shown as a trailing option so you can see + clear it.
+ */
+function BatchPicker({ tankId, current, onPick }: {
+  tankId: string; current?: string; onPick: (batchNo: string) => void;
+}) {
+  const bf = useBrewfatherBatches();
+  // assignable = in a vessel: Fermenting or Conditioning
+  const assignable = bf.filter((b) => b.status === 'Fermenting' || b.status === 'Conditioning');
+  const opts = assignable.map((b) => ({ no: String(b.batchNo), name: b.name, status: b.status }));
+  // if current assignment isn't in the assignable set (e.g. Completed), surface it
+  const curNo = current && current !== '' && current !== 'None' && current !== 'none' ? current : null;
+  if (curNo && !opts.some((o) => o.no === curNo)) {
+    const stale = bf.find((b) => String(b.batchNo) === curNo);
+    opts.push({ no: curNo, name: stale ? `${stale.name} (${stale.status})` : `#${curNo} (gone)`, status: 'stale' });
+  }
+  if (!opts.length) {
+    return <span style={hint}>No fermenting or conditioning batches in Brewfather yet.</span>;
+  }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+      {/* None / release */}
+      <button onClick={() => onPick('')} style={pillStyle(!curNo)}>None</button>
+      {opts.map((o) => (
+        <button key={o.no} onClick={() => onPick(o.no)} style={pillStyle(o.no === curNo)}
+          title={`Batch #${o.no} · ${o.status}`}>
+          {o.name}
+          {o.status === 'Conditioning' && <span style={{ opacity: 0.6, fontSize: 10 }}> · COND</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** shared pill button style (active/inactive) */
+function pillStyle(on: boolean): React.CSSProperties {
+  return {
+    fontFamily: theme.font.mono, fontSize: 12, padding: '7px 12px', borderRadius: 8, cursor: 'pointer',
+    border: `1px solid ${on ? theme.color.cyan : theme.color.panelBorder}`,
+    background: on ? hexA(theme.color.cyan, 0.15) : theme.color.inset,
+    color: on ? theme.color.cyan : theme.color.textDim,
+    boxShadow: on ? theme.glow(theme.color.cyan, 0.25) : 'none', transition: 'all 0.12s',
+  };
 }
 
 function Pills({ options, active, onPick, wrap }: {

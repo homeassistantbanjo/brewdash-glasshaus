@@ -45,25 +45,15 @@ export function useBreweryActions() {
   );
 
   return {
-    /** Replace a tank's batch-helper options wholesale (background reconcile).
-     *  HA's input_select.set_options RESETS the current selection to the first
-     *  option as a side effect — so if a real batch is selected, we re-select it
-     *  immediately after. Without this, syncing options on reconnect/reboot wiped
-     *  the assignment (the recurring "tanks lose their batch on reboot" bug). */
-    setBatchOptions: async (t: string, options: string[], keepSelection?: string) => {
-      await callQuiet('input_select', 'set_options', `input_select.${t}_batch`, { options });
-      const keep = keepSelection && keepSelection !== 'None' && keepSelection !== 'none'
-        ? keepSelection : null;
-      if (keep && options.includes(keep)) {
-        await callQuiet('input_select', 'select_option', `input_select.${t}_batch`, { option: keep });
-      }
-    },
     setStatus: (t: string, v: string) =>
       call('input_select', 'select_option', `input_select.${t}_status`, { option: v }, `${label(t)} status → ${v}`),
     setTilt: (t: string, v: string) =>
       call('input_select', 'select_option', `input_select.${t}_tilt`, { option: v }, `${label(t)} Tilt → ${v}`),
-    setBatch: (t: string, v: string) =>
-      call('input_select', 'select_option', `input_select.${t}_batch`, { option: v }, `${label(t)} batch → ${v}`),
+    /** Assign a batch by writing the Brewfather batch NUMBER (stable ID) as free
+     *  text — no options list, so HA can never reset it on restart. Empty string
+     *  = unassigned. The picker passes the batchNo; display resolves it live. */
+    setBatch: (t: string, batchNo: string) =>
+      call('input_text', 'set_value', `input_text.${t}_batch`, { value: batchNo }, `${label(t)} batch → ${batchNo || 'unassigned'}`),
     setExpectedFg: (t: string, fg: number) =>
       call('input_number', 'set_value', `input_number.${t}_expected_fg`, { value: fg }, `${label(t)} expected FG → ${fg}`),
     markCleaned: (t: string, iso: string) =>

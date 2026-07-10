@@ -31,7 +31,12 @@ export interface TankConfig {
   cleaned: string;      // input_datetime.tank_N_last_cleaned
   // assignment helpers
   tiltAssign: string;   // input_select.tank_N_tilt
-  batchAssign: string;  // input_select.tank_N_batch
+  // batch is stored as FREE TEXT (input_text), not a dropdown — the assignable
+  // beers are dynamic (any batch, any tank, recurring yearly), so there's no fixed
+  // options list to validate against. This is what makes the assignment survive an
+  // HA restart: an input_text has no options, so HA can never reset it. The PICKER
+  // dropdown is built live from Brewfather in the UI; only the name string is saved.
+  batchAssign: string;  // input_text.tank_N_batch
 }
 
 export const TANKS: TankConfig[] = [
@@ -51,7 +56,7 @@ export const TANKS: TankConfig[] = [
     status: 'input_select.tank_1_status',
     cleaned: 'input_datetime.tank_1_last_cleaned',
     tiltAssign: 'input_select.tank_1_tilt',
-    batchAssign: 'input_select.tank_1_batch',
+    batchAssign: 'input_text.tank_1_batch',
   },
   {
     id: 'tank_2',
@@ -67,7 +72,7 @@ export const TANKS: TankConfig[] = [
     status: 'input_select.tank_2_status',
     cleaned: 'input_datetime.tank_2_last_cleaned',
     tiltAssign: 'input_select.tank_2_tilt',
-    batchAssign: 'input_select.tank_2_batch',
+    batchAssign: 'input_text.tank_2_batch',
   },
   {
     id: 'tank_3',
@@ -81,7 +86,7 @@ export const TANKS: TankConfig[] = [
     status: 'input_select.tank_3_status',
     cleaned: 'input_datetime.tank_3_last_cleaned',
     tiltAssign: 'input_select.tank_3_tilt',
-    batchAssign: 'input_select.tank_3_batch',
+    batchAssign: 'input_text.tank_3_batch',
   },
 ];
 

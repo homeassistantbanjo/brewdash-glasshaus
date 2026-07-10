@@ -9,7 +9,7 @@ import { InsightsView } from './InsightsView';
 import { InsightPanel } from './InsightPanel';
 import { ThemeSwitcher } from './ThemeSwitcher';
 import { theme, stateColor, hexA, useThemeName } from '../theme/tokens';
-import { useActiveBatches, useGlycol, useEquipment, useSyncBatchOptions, usePlantDiag, useInsight } from '../hooks/useBrewery';
+import { useActiveBatches, useGlycol, useEquipment, usePlantDiag, useInsight } from '../hooks/useBrewery';
 import { Tank, isActiveBrew } from '../types/domain';
 import logo from '../assets/iconoclast-logo.jpg';
 
@@ -20,9 +20,9 @@ export function Overview() {
   const plantDiag = usePlantDiag();
   const insight = useInsight();
   useThemeName(); // re-render this whole view when the theme switches
-  // keep each tank's batch picker options in sync with Brewfather's live
-  // Fermenting set (adds new batches, prunes departed ones → marks tank Dirty)
-  useSyncBatchOptions();
+  // (batch options are no longer synced to an input_select — batch is stored as
+  //  free text (batchNo) and the picker builds its list live from Brewfather, so
+  //  there's nothing to reconcile and nothing that can reset on reboot.)
   const [view, setView] = useState<'tanks' | 'graphs' | 'insights'>('tanks');
   const [editing, setEditing] = useState<Tank | null>(null);
   // tank id the alert bar asked to highlight (pulses that card briefly)
