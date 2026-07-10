@@ -39,6 +39,7 @@ export function BrewDayView() {
   const [state, setState] = useState<{ loading: boolean; msg: string | null; err: string | null }>(
     { loading: false, msg: null, err: null });
   const [current, setCurrent] = useState<any>(null);
+  const [prep, setPrep] = useState<any>(null);
 
   useEffect(() => {
     fetch(`${BREWFATHER_URL}/batches`)
@@ -53,11 +54,16 @@ export function BrewDayView() {
   // fetch current measured values from Brewfather to prefill/show what's there
   useEffect(() => {
     if (!selected) return;
-    setCurrent(null); setState((s) => ({ ...s, err: null }));
-    fetch(`${BREWFATHER_URL}/batch/${encodeURIComponent(selected._id || selected.batchNo)}`)
+    setCurrent(null); setPrep(null); setState((s) => ({ ...s, err: null }));
+    const id = selected._id || selected.batchNo;
+    fetch(`${BREWFATHER_URL}/batch/${encodeURIComponent(id)}`)
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(setCurrent)
       .catch((e) => setState((s) => ({ ...s, err: `Couldn't read Brewfather: ${e.message}` })));
+    fetch(`${BREWFATHER_URL}/recipe/${encodeURIComponent(id)}`)
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(setPrep)
+      .catch(() => {/* prep is best-effort; measurement entry still works */});
   }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
@@ -96,7 +102,7 @@ export function BrewDayView() {
           fontFamily: theme.font.sans, fontSize: 13, color: theme.color.red,
           background: hexA(theme.color.red, 0.1), border: `1px solid ${hexA(theme.color.red, 0.4)}`,
           borderRadius: theme.radius.md, padding: '10px 14px',
-        }}>{listErr} — is the Glasshaus-brewfather container running on :8092?</div>
+        }}>{listErr} — is the Glasshaus-brewfather container running on :8093?</div>
       ) : active.length === 0 ? (
         <div style={{ fontFamily: theme.font.sans, fontSize: 13, color: theme.color.textDim, padding: 20 }}>
           No batches in <b>Planning</b> or <b>Brewing</b> status in Brewfather. Set a batch to Brewing
@@ -121,7 +127,13 @@ export function BrewDayView() {
             })}
           </div>
 
-          {/* measurement fields */}
+          {/* PREP — recipe bill for weighing out (read-only, from Brewfather) */}
+          {prep && <PrepSection prep={prep} />}
+
+          {/* LOG — measurement entry (writes back to Brewfather) */}
+          <div style={{ fontFamily: theme.font.mono, fontSize: 11, letterSpacing: 1.5, color: theme.color.textFaint, textTransform: 'uppercase', marginTop: 6 }}>
+            ⌐ Log Measurements → Brewfather
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, maxWidth: 720 }}>
             {FIELDS.map((f) => {
               const cur = current?.measured?.[f.key];
@@ -169,6 +181,97 @@ export function BrewDayView() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// ---- unit conversions for the prep display -----------------------------------
+const KG_TO_LB = 2.2046226218;
+const L_TO_GAL = 0.2641720524;
+/** kg → "X lb Y oz" (how you'd weigh grain) */
+function kgToLbOz(kg: number | null): string {
+  if (kg == null) return '—';
+  const totalOz = kg * KG_TO_LB * 16;
+  const lb = Math.floor(totalOz / 16);
+  const oz = Math.round((totalOz - lb * 16) * 10) / 10;
+  return lb > 0 ? `${lb} lb ${oz} oz` : `${oz} oz`;
+}
+const lToGal = (l: number | null) => (l == null ? '—' : `${(l * L_TO_GAL).toFixed(2)} gal`);
+
+/**
+ * PREP — the recipe ingredient bill for brew-day prep, in the units you weigh in:
+ * grain in lb+oz, water in gallons, salts/acids in their native g/ml, hops in g.
+ * Read-only, pulled live from Brewfather.
+ */
+function PrepSection({ prep }: { prep: any }) {
+  const card: React.CSSProperties = {
+    background: theme.color.panelHi, clipPath: clip, borderRadius: clip ? 0 : theme.radius.md,
+    border: `1px solid ${theme.color.panelBorder}`, padding: '12px 14px',
+    display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0,
+  };
+  const head = (t: string) => (
+    <div style={{ fontFamily: theme.font.mono, fontSize: 11, letterSpacing: 1.5, color: theme.color.cyan, textTransform: 'uppercase' }}>{t}</div>
+  );
+  const row = (l: string, r: string, warn?: boolean) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontFamily: theme.font.sans, fontSize: 13 }}>
+      <span style={{ color: theme.color.textLabel, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l}</span>
+      <span style={{ fontFamily: theme.font.mono, fontWeight: 600, color: warn ? theme.color.amber : theme.color.text, whiteSpace: 'nowrap' }}>{r}</span>
+    </div>
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontFamily: theme.font.mono, fontSize: 11, letterSpacing: 1.5, color: theme.color.textFaint, textTransform: 'uppercase' }}>
+        ⌐ Prep · {prep.name}{prep.style ? ` · ${prep.style}` : ''}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
+        {/* GRAIN */}
+        <div style={card}>
+          {head(`Grain Bill (${(prep.fermentables || []).length})`)}
+          {(prep.fermentables || []).map((f: any, i: number) => row(f.name, kgToLbOz(f.kg), false))}
+          {prep.fermentables?.length ? row('— total —',
+            kgToLbOz((prep.fermentables).reduce((s: number, f: any) => s + (f.kg || 0), 0))) : null}
+        </div>
+        {/* WATER */}
+        <div style={card}>
+          {head('Water')}
+          {row('Mash / strike', lToGal(prep.water?.mashL))}
+          {row('Sparge', lToGal(prep.water?.spargeL))}
+          {row('Boil size', lToGal(prep.boilSizeL))}
+          {row('Batch size', lToGal(prep.batchSizeL))}
+        </div>
+        {/* SALTS / WATER AGENTS */}
+        {(prep.salts || []).length > 0 && (
+          <div style={card}>
+            {head(`Salts & Acids (${prep.salts.length})`)}
+            {prep.salts.map((s: any, i: number) => row(`${s.name}${s.use && s.use !== 'Mash' ? ` (${s.use})` : ''}`,
+              `${s.amount ?? '—'} ${s.unit}`))}
+          </div>
+        )}
+        {/* HOPS */}
+        {(prep.hops || []).length > 0 && (
+          <div style={card}>
+            {head(`Hops (${prep.hops.length})`)}
+            {prep.hops.map((h: any, i: number) => row(
+              `${h.name}${h.time != null ? ` · ${h.time}m ${h.use}` : h.use ? ` · ${h.use}` : ''}`,
+              `${h.g != null ? h.g.toFixed(1) : '—'} g`))}
+          </div>
+        )}
+        {/* OTHER MASH ADDITIONS (e.g. Brewtan B) */}
+        {(prep.otherMiscs || []).length > 0 && (
+          <div style={card}>
+            {head('Other Additions')}
+            {prep.otherMiscs.map((m: any, i: number) => row(`${m.name}${m.use ? ` (${m.use})` : ''}`, `${m.amount ?? '—'} ${m.unit}`))}
+          </div>
+        )}
+        {/* MASH STEPS */}
+        {(prep.mashSteps || []).length > 0 && (
+          <div style={card}>
+            {head('Mash Steps')}
+            {prep.mashSteps.map((s: any, i: number) => row(s.name || `Step ${i + 1}`,
+              `${s.tempC != null ? Math.round(s.tempC * 9 / 5 + 32) + '°F' : '—'} · ${s.min ?? '—'}m`))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

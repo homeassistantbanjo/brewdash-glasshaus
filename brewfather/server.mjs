@@ -138,9 +138,46 @@ async function bfBrewDayBatches() {
   return out;
 }
 
+// ---- recipe PREP data for brew day: grain bill, water, salts, hops -------------
+// Amounts come metric (fermentables kg, hops/salts g); the dashboard converts for
+// display. Water volumes: BF often leaves mash/spargeWaterAmount null, so fall back
+// to the computed adjustment volumes.
+async function bfRecipePrep(batchIdOrNo) {
+  const id = await resolveId(batchIdOrNo);
+  const r = await fetch(`${BF}/batches/${encodeURIComponent(id)}?complete=true`, { headers: { Authorization: AUTH } });
+  if (!r.ok) throw new Error(`Brewfather HTTP ${r.status}`);
+  const b = await r.json();
+  const rec = b.recipe || {};
+  const w = rec.water || {};
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const mashL = num(w.mashWaterAmount) ?? num(w.mashAdjustments?.volume);
+  const spargeL = num(w.spargeWaterAmount) ?? num(w.spargeAdjustments?.volume);
+  const miscs = Array.isArray(rec.miscs) ? rec.miscs : [];
+  return {
+    name: rec.name || b.name, batchNo: b.batchNo, style: rec.style?.name || null,
+    batchSizeL: num(rec.batchSize), boilSizeL: num(rec.boilSize), boilTime: num(rec.boilTime),
+    fermentables: (rec.fermentables || []).map((f) => ({ name: f.name, kg: num(f.amount), type: f.type })),
+    hops: (rec.hops || []).map((h) => ({ name: h.name, g: num(h.amount), use: h.use, time: num(h.time) })),
+    // water agents (salts/acids) vs other mash miscs — keep unit BF provides (g/ml)
+    salts: miscs.filter((m) => m.type === 'Water Agent').map((m) => ({ name: m.name, amount: num(m.amount), unit: m.unit || 'g', use: m.use })),
+    otherMiscs: miscs.filter((m) => m.type !== 'Water Agent').map((m) => ({ name: m.name, amount: num(m.amount), unit: m.unit || 'g', use: m.use, type: m.type })),
+    water: { mashL, spargeL },
+    mashSteps: (rec.mash?.steps || []).map((s) => ({ name: s.name, tempC: num(s.stepTemp), min: num(s.stepTime) })),
+  };
+}
+
 createServer((req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, CORS).end(); return; }
   if (req.method === 'GET' && req.url === '/health') { res.writeHead(200, CORS).end('ok'); return; }
+
+  // GET /recipe/:id → brew-day prep (grain/water/salts/hops), amounts metric
+  const recipeMatch = req.method === 'GET' && req.url?.match(/^\/recipe\/([^/?]+)/);
+  if (recipeMatch) {
+    bfRecipePrep(decodeURIComponent(recipeMatch[1]))
+      .then((p) => sendJson(res, 200, p))
+      .catch((e) => sendJson(res, 502, { error: e.message }));
+    return;
+  }
 
   // GET /batches → Planning + Brewing batches for the Brew Day picker
   if (req.method === 'GET' && req.url?.startsWith('/batches')) {
