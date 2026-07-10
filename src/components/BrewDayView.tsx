@@ -91,6 +91,27 @@ export function BrewDayView() {
     }
   };
 
+  // advance the batch's Brewfather status (Phase 1: Planning → Brewing, when you
+  // pull the recipe on the BrewTools touchscreen). Deliberate, one tap.
+  const [statusBusy, setStatusBusy] = useState(false);
+  const setBatchStatus = async (status: string) => {
+    if (!selected) return;
+    setStatusBusy(true); setState((s) => ({ ...s, err: null }));
+    try {
+      const id = selected._id || selected.batchNo;
+      const r = await fetch(`${BREWFATHER_URL}/batch/${encodeURIComponent(id)}/status`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setState({ loading: false, msg: `Batch set to ${status} in Brewfather`, err: null });
+      // reflect locally + refresh the list so the pill/status updates
+      setActive((prev) => prev.map((b) => (b.batchNo === selected.batchNo ? { ...b, status } : b)));
+    } catch (e) {
+      setState({ loading: false, msg: null, err: (e as Error).message });
+    } finally { setStatusBusy(false); }
+  };
+
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14, paddingRight: 4 }}>
       <div style={{ fontFamily: theme.font.mono, fontSize: 12, letterSpacing: 1, color: theme.color.textLabel, textTransform: 'uppercase' }}>
@@ -138,6 +159,24 @@ export function BrewDayView() {
               );
             })}
           </div>
+
+          {/* START BREWING — deliberate Planning→Brewing status flip, shown only for
+              a Planning batch (you tap this when you pull the recipe on BrewTools). */}
+          {selected?.status === 'Planning' && (
+            <button onClick={() => setBatchStatus('Brewing')} disabled={statusBusy} style={{
+              alignSelf: 'flex-start', fontFamily: theme.font.mono, fontSize: 12, letterSpacing: 1,
+              textTransform: 'uppercase', padding: '9px 18px', cursor: statusBusy ? 'wait' : 'pointer',
+              clipPath: clip, borderRadius: clip ? 0 : 8,
+              border: `1px solid ${theme.color.green}`, background: hexA(theme.color.green, 0.16),
+              color: theme.color.green, boxShadow: theme.glow(theme.color.green, 0.25),
+            }}>{statusBusy ? 'Setting…' : '▸ Start Brewing (set Brewing in Brewfather)'}</button>
+          )}
+          {selected && selected.status !== 'Planning' && (
+            <div style={{ fontFamily: theme.font.mono, fontSize: 11, color: theme.color.textDim, letterSpacing: 0.5 }}>
+              Status: <span style={{ color: theme.color.cyan }}>{selected.status}</span>
+              {selected.status === 'Brewing' && ' — brewing in progress'}
+            </div>
+          )}
 
           {/* PREP — recipe bill for weighing out (read-only, from Brewfather) */}
           {prep && <PrepSection prep={prep} />}

@@ -235,6 +235,32 @@ createServer((req, res) => {
     return;
   }
 
+  // POST /batch/:id/status  → advance the batch's Brewfather status (e.g. Brewing).
+  // Deliberate, one intended transition per call; validated against BF's enum.
+  const statusMatch = req.method === 'POST' && req.url?.match(/^\/batch\/([^/?]+)\/status/);
+  if (statusMatch) {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', async () => {
+      let parsed; try { parsed = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { error: 'bad json' }); }
+      const STATUSES = ['Planning', 'Brewing', 'Fermenting', 'Conditioning', 'Completed', 'Archived'];
+      if (!STATUSES.includes(parsed.status)) return sendJson(res, 400, { error: 'invalid status' });
+      try {
+        const arg = decodeURIComponent(statusMatch[1]);
+        await bfPatchBatch(arg, { status: parsed.status });
+        try { invalidate(await resolveId(arg)); } catch { /* ignore */ }
+        // also drop the brew-day list cache so the batch's new status shows fast
+        _brewdayCache = { at: 0, list: null };
+        console.log(`[brewfather] status → ${parsed.status} on batch ${arg}`);
+        sendJson(res, 200, { ok: true, status: parsed.status });
+      } catch (e) {
+        console.error('[brewfather] status write failed:', e.message);
+        sendJson(res, 502, { error: e.message });
+      }
+    });
+    return;
+  }
+
   // PATCH /batch/:id  → write measured values (body in user units)
   const patchMatch = req.method === 'PATCH' && req.url?.match(/^\/batch\/([^/?]+)/);
   if (patchMatch) {
