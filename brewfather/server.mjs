@@ -132,12 +132,18 @@ async function bfPatchBatch(batchIdOrNo, patch) {
 async function bfGetBatch(batchIdOrNo) {
   const batchId = await resolveId(batchIdOrNo);
   return cached(`get:${batchId}`, async () => {
-  const r = await fetch(`${BF}/batches/${encodeURIComponent(batchId)}`, { headers: { Authorization: AUTH } });
+  // complete=true pulls the embedded recipe so we can read the hop schedule and
+  // decide dryHop from TRUTH (a "Dry Hop" use in the schedule) rather than guessing
+  // from the batch name — the programs container uses this to set the 6d vs 3d
+  // terminal-confirmation window (hop creep) and to gate the Conditioning flip.
+  const r = await fetch(`${BF}/batches/${encodeURIComponent(batchId)}?complete=true`, { headers: { Authorization: AUTH } });
   if (!r.ok) throw new Error(`Brewfather HTTP ${r.status}`);
   const b = await r.json();
   const Lto = (v) => (n(v) != null ? +(v / 3.785411784).toFixed(2) : null); // L→gal for display
+  const hops = (b.recipe && Array.isArray(b.recipe.hops)) ? b.recipe.hops : [];
+  const dryHop = hops.some((h) => typeof h.use === 'string' && /dry\s*hop/i.test(h.use));
   return {
-    id: b._id, name: b.name, batchNo: b.batchNo, status: b.status,
+    id: b._id, name: b.name, batchNo: b.batchNo, status: b.status, dryHop,
     measured: {
       preBoilGravity: b.measuredPreBoilGravity ?? null,
       postBoilGravity: b.measuredPostBoilGravity ?? null,

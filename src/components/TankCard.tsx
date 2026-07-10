@@ -159,7 +159,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
   // already knows the stage), (3) gravity-detected ferment phase, (4) lifecycle.
   const statusLabel = crashing ? '❄ COLD CRASH'
     : programPhase ? programPhase.toUpperCase()
-    : fermenting ? phaseGuess(batch!)
+    : fermenting ? readiness(batch!, null).headline
     : tank.status.toUpperCase();
   // a mono ID tag for the header — batch number when known, else the tank id
   const idTag = fermenting && batch!.batchNo != null ? `//${batch!.batchNo}` : `//${tank.id.replace('tank_', 'T')}`;
@@ -262,7 +262,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                   { k: 'Apparent attenuation', v: fmt(b!.attenuation, 1) + '%' },
                   { k: 'ABV so far', v: fmt(b!.abv, 1) + '%' },
                   { k: 'Days fermenting', v: b!.daysFermenting?.toFixed(1) ?? '—' },
-                  { k: 'Phase', v: phaseGuess(b!) },
+                  { k: 'Phase', v: readiness(b!, null).headline },
                 ],
               })} />
           </>
@@ -339,7 +339,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           </div>
           {/* prominent STAGE badge — where the beer is in the ferment→package arc,
               so it's not just a small header word. Shows the readiness call. */}
-          <StageBadge batch={batch!} programPhase={programPhase} accent={accent} />
+          <StageBadge batch={batch!} programPhase={programPhase} />
         </div>
       )}
 
@@ -521,45 +521,54 @@ export function alertColor(s: AlertSeverity): string {
     : theme.color.cyan;
 }
 
-/** Gravity-detected fermentation phase (used when NO program is running).
- *  Layers the real stability signals on top of the crude attenuation bands so a
- *  beer that's flat-at-FG reads TERMINAL/STABLE even below 78% attenuation, and a
- *  still-dropping beer honestly reads SLOWING. */
-function phaseGuess(b: ActiveBatch): string {
-  // confirmed terminal = gravity held stable for the required window (3d / 6d)
-  if (b.terminalConfirmed) return 'STABLE';
-  // flat + near FG (but not yet confirmed-stable) → TERMINAL, regardless of the
-  // exact attenuation %. stableDays != null means it's currently in the flat band.
-  if (b.stableDays != null) return 'TERMINAL';
-  if (b.attenuation == null) return 'UNKNOWN';
-  if (b.attenuation < 30) return 'LAG';
-  if (b.attenuation < 60) return 'ACTIVE';
-  if (b.attenuation < 78) return 'SLOWING';
-  return 'TERMINAL';
+/** Brewer-facing readiness call. Collapses the internal state-machine labels
+ *  (TERMINAL = flat-at-FG but window not yet met; STABLE = window met) into ONE
+ *  headline that says what you actually DO next, because "TERMINAL vs STABLE" is
+ *  jargon that reads as two confusing states rather than "still going" vs "done".
+ *  Returns { headline, sub, color }. */
+function readiness(b: ActiveBatch, programPhase: string | null): { headline: string; sub: string; color: string } {
+  const t = theme.color;
+  if (programPhase) return { headline: programPhase.toUpperCase(), sub: 'running fermentation program', color: t.cyan };
+  // Gravity held flat for the full confirmation window → fermentation is DONE.
+  // This is the "you're conditioning now" state the brewer cares about.
+  if (b.terminalConfirmed) {
+    const held = b.stableDays != null ? `stable ${b.stableDays}d` : 'stable';
+    const bf = b.bfConditioned ? ' · Brewfather → Conditioning ✓' : '';
+    return { headline: 'CONDITIONING', sub: `terminal gravity reached · ${held} · ready to package${bf}`, color: t.green };
+  }
+  // At FG and flat, but hasn't held the full window yet — still confirming. A
+  // dry-hopped beer needs 6d (hop creep can restart fermentation) vs 3d clean.
+  if (b.stableDays != null) {
+    const need = b.dryHop ? 6 : 3;
+    const why = b.dryHop ? ' (dry-hop / hop-creep window)' : '';
+    return { headline: 'TERMINAL', sub: `at final gravity · confirming stability ${b.stableDays}/${need}d${why}`, color: t.cyan };
+  }
+  const a = b.attenuation;
+  if (a == null) return { headline: 'FERMENTING', sub: 'no gravity signal yet', color: t.amber };
+  if (a < 30) return { headline: 'LAG', sub: 'getting started', color: t.amber };
+  if (a < 60) return { headline: 'ACTIVE', sub: 'fermenting hard', color: t.green };
+  if (a < 78) return { headline: 'SLOWING', sub: 'attenuation slowing — approaching terminal', color: t.green };
+  return { headline: 'TERMINAL', sub: 'at final gravity — confirming stability', color: t.cyan };
 }
-/** Prominent STAGE badge — a labeled band showing where the beer is in the arc
- *  (LAG→ACTIVE→SLOWING→TERMINAL→STABLE, or the active program's phase) plus the
- *  readiness call, so "where is this beer" is obvious without reading the header. */
-function StageBadge({ batch, programPhase, accent }: { batch: ActiveBatch; programPhase: string | null; accent: string }) {
-  const stage = programPhase ? programPhase.toUpperCase() : phaseGuess(batch);
-  // readiness sub-text driven by the real stability signals
-  let sub: string; let color = accent;
-  if (programPhase) { sub = 'running program'; }
-  else if (batch.terminalConfirmed) { sub = `stable ${batch.stableDays ?? ''}d · ready for conditioning`; color = theme.color.green; }
-  else if (stage === 'TERMINAL' || batch.stableDays != null) { sub = `at terminal · confirming stability (${batch.stableDays ?? 0}/3d)`; color = theme.color.cyan; }
-  else if (stage === 'SLOWING') { sub = 'attenuation slowing'; }
-  else if (stage === 'ACTIVE') { sub = 'active fermentation'; color = theme.color.green; }
-  else if (stage === 'LAG') { sub = 'lag / getting started'; }
-  else sub = '';
+/** Prominent STAGE band — the single most important line on the card: where the
+ *  beer is in the ferment→package arc and what to do next. Full-width, large. */
+function StageBadge({ batch, programPhase }: { batch: ActiveBatch; programPhase: string | null }) {
+  const { headline, sub, color } = readiness(batch, programPhase);
   return (
     <div style={{
-      marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-      padding: '5px 12px', borderRadius: theme.radius.sm,
-      border: `1px solid ${hexA(color, 0.4)}`, background: hexA(color, 0.08),
+      marginTop: 10, padding: '9px 14px', borderRadius: theme.radius.sm,
+      border: `1px solid ${hexA(color, 0.55)}`,
+      background: `linear-gradient(180deg, ${hexA(color, 0.16)}, ${hexA(color, 0.06)})`,
+      boxShadow: `0 0 14px ${hexA(color, 0.22)}, inset 0 0 20px ${hexA(color, 0.05)}`,
+      textAlign: 'center',
     }}>
-      <span style={{ fontFamily: theme.font.mono, fontSize: 9, letterSpacing: 1.5, color: theme.color.textFaint, textTransform: 'uppercase' }}>Stage</span>
-      <span style={{ fontFamily: theme.font.mono, fontSize: 13, fontWeight: 700, letterSpacing: 1, color, textShadow: `0 0 8px ${hexA(color, 0.4)}` }}>{stage}</span>
-      {sub && <span style={{ fontFamily: theme.font.sans, fontSize: 11, color: theme.color.textDim }}>· {sub}</span>}
+      <div style={{
+        fontFamily: theme.font.mono, fontSize: 20, fontWeight: 800, letterSpacing: 3,
+        color, textShadow: `0 0 12px ${hexA(color, 0.6)}`, lineHeight: 1.1,
+      }}>{headline}</div>
+      {sub && <div style={{
+        fontFamily: theme.font.sans, fontSize: 11, color: theme.color.textDim, marginTop: 3, letterSpacing: 0.3,
+      }}>{sub}</div>}
     </div>
   );
 }

@@ -261,6 +261,8 @@ export function composeBatch(
     tiltGravityAgeMin: null,
     stableDays: null,
     terminalConfirmed: false,
+    dryHop: false,
+    bfConditioned: false,
 
     verification: verifyAssignment(beerTemp.value, tank.probeTemp.value, now),
   };

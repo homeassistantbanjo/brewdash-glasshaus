@@ -300,6 +300,10 @@ export interface ActiveBatch {
   stableDays: number | null;
   /** true once stable ≥ the required window (3d normal, 6d dry-hopped) */
   terminalConfirmed: boolean;
+  /** recipe has a dry-hop step (from Brewfather) — extends the terminal window */
+  dryHop: boolean;
+  /** the runner has auto-advanced this batch to Conditioning in Brewfather */
+  bfConditioned: boolean;
 
   /** raw gravity/temp readings for inline sparklines, oldest→newest.
    *  Sourced from all_batches_data.readings[] (per-Tilt). */

@@ -39,6 +39,20 @@ input_boolean:
     <<: *ferm_started
     name: Tank 3 Fermentation Started
 
+  # one-shot latch: the runner has already auto-advanced this tank's batch to
+  # 'Conditioning' in Brewfather (fires once when gravity confirms terminal —
+  # 3d clean / 6d dry-hopped for hop creep). Reset by the runner when the tank's
+  # assigned batch changes, so the next batch flips on its own terminal.
+  tank_1_bf_conditioned: &bf_conditioned
+    name: Tank 1 BF Advanced To Conditioning
+    icon: mdi:barrel
+  tank_2_bf_conditioned:
+    <<: *bf_conditioned
+    name: Tank 2 BF Advanced To Conditioning
+  tank_3_bf_conditioned:
+    <<: *bf_conditioned
+    name: Tank 3 BF Advanced To Conditioning
+
   # per-tank batch key the above are scoped to — when the assigned batch changes,
   # the runner clears the latch + stability clock. Stored as text so a reboot knows
   # which batch the persisted state belongs to (avoids carrying stale state to a

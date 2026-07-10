@@ -26,6 +26,33 @@ const TANKS = (process.env.TANKS || 'tank_1,tank_2,tank_3').split(',').map((t) =
 function req(k) { const v = process.env[k]; if (!v) { console.error(`missing env ${k}`); process.exit(1); } return v; }
 const H = { Authorization: `Bearer ${HA_TOKEN}`, 'content-type': 'application/json' };
 const get = (p) => fetch(`${HA_URL}${p}`, { headers: H }).then((r) => r.json());
+
+// Brewfather sidecar container. The HA Brewfather integration's batch object is
+// thin (recipe = {name, fermentation} only — NO hop schedule, NO style), so for
+// the truths that depend on the RECIPE — is this beer dry-hopped? what's the
+// authoritative BF status? — we ask the brewfather container, which reads the
+// full recipe. Optional: if BF_URL is unset we degrade gracefully (dryHop=false,
+// no auto-flip). The container already caches 60s, so a per-tick call is cheap.
+const BF_URL = (process.env.BF_URL || '').replace(/\/$/, '');
+const _bfFactsCache = new Map();  // batchKey → { at, facts }  (short in-runner cache)
+async function bfFacts(batchKey) {
+  if (!BF_URL || !batchKey) return null;
+  const hit = _bfFactsCache.get(batchKey);
+  if (hit && Date.now() - hit.at < 55_000) return hit.facts;
+  try {
+    const r = await fetch(`${BF_URL}/batch/${encodeURIComponent(batchKey)}`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) throw new Error(`brewfather HTTP ${r.status}`);
+    const j = await r.json();
+    const facts = { status: j.status ?? null, dryHop: !!j.dryHop };
+    _bfFactsCache.set(batchKey, { at: Date.now(), facts });
+    return facts;
+  } catch (e) {
+    console.error(`[bf] facts fetch failed for ${batchKey}:`, e.message);
+    return hit?.facts ?? null;   // fall back to a stale value if we have one
+  }
+}
 const numOr = (v, d = null) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
 const usable = (s) => s != null && s !== 'unknown' && s !== 'unavailable' && s !== '';
 
@@ -321,9 +348,14 @@ async function deriveTank(tankId, by) {
   }
   const prevLatched = st.latched;
 
-  // is this batch dry-hopped? (raises the stable-days bar to 6d for hop creep)
-  const dryHopped = /(?:dry\s*hop|neipa|hazy|ipa|pale)/i.test(batchSel || '') ||
-    /(?:dry\s*hop|neipa|hazy)/i.test(batch?.recipe?.style?.name || '');
+  // is this batch dry-hopped? Ask the brewfather container, which reads the REAL
+  // recipe hop schedule (use: "Dry Hop"). The HA integration's recipe object has no
+  // hops, so the old name-regex was the only signal and it false-fired on any batch
+  // named "...pale..." — real truth is worth the (cached) sidecar call. Raises the
+  // terminal-confirmation window to 6d for hop creep. Null facts (BF_URL unset or
+  // fetch failed) → dryHop:false, so we never HOLD a beer we can't verify.
+  const facts = batchSel ? await bfFacts(batchSel) : null;
+  const dryHopped = !!facts?.dryHop;
 
   const d = computeDerived({
     gravity, og,
@@ -361,12 +393,50 @@ async function deriveTank(tankId, by) {
   // (HA input_datetime can't be nulled; when gravity leaves the stable band the
   //  sameBatch+isStableNow gates make the stored value ignored, so no clear needed.)
 
+  // --- AUTO-ADVANCE Brewfather → Conditioning, once, on confirmed terminal -------
+  // The intelligence is already in `terminalConfirmed`: it needs the full stability
+  // WINDOW held (3d clean, 6d dry-hopped for hop creep), and the runner RESETS the
+  // clock (stableSinceMs=null above) the moment gravity re-drops — so a hop-creep
+  // secondary fermentation un-confirms terminal and this WON'T fire mid-creep.
+  // Guards: fire only if BF says the batch is still 'Fermenting' (never touch a
+  // Planning/Completed/Archived batch), and latch via input_boolean so it fires
+  // exactly once per batch. The latch key follows the batch, so a NEW batch on this
+  // tank starts un-latched. bfConditioned surfaces the note in the app.
+  // The latch belongs to the CURRENT batch. If HA still holds a latch from a
+  // previous batch (storedKey != batchKey handled below via sameBatch), clear it so
+  // the new batch on this tank can flip on its own terminal.
+  if (!sameBatch && s(`input_boolean.${tankId}_bf_conditioned`) === 'on') {
+    await callService('input_boolean', 'turn_off', { entity_id: `input_boolean.${tankId}_bf_conditioned` }).catch(() => {});
+  }
+  const flipLatchOn = sameBatch && s(`input_boolean.${tankId}_bf_conditioned`) === 'on';
+  let bfConditioned = flipLatchOn;
+  if (d.terminalConfirmed && !flipLatchOn && BF_URL && batchSel && facts?.status === 'Fermenting') {
+    try {
+      const r = await fetch(`${BF_URL}/batch/${encodeURIComponent(batchSel)}/status`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'Conditioning' }), signal: AbortSignal.timeout(8000),
+      });
+      if (!r.ok) throw new Error(`brewfather status HTTP ${r.status}`);
+      await callService('input_boolean', 'turn_on', { entity_id: `input_boolean.${tankId}_bf_conditioned` }).catch(() => {});
+      _bfFactsCache.delete(batchSel);   // force a fresh status read next tick
+      bfConditioned = true;
+      console.log(`[${tankId}] batch ${batchSel}: terminal confirmed (${d.stableDays}d, dryHop=${dryHopped}) → advanced Brewfather to Conditioning`);
+    } catch (e) {
+      console.error(`[${tankId}] BF conditioning flip failed:`, e.message);
+    }
+  }
+  // if this tank cleared its batch, drop the latch so the next batch can flip
+  if (!batchSel && flipLatchOn) {
+    await callService('input_boolean', 'turn_off', { entity_id: `input_boolean.${tankId}_bf_conditioned` }).catch(() => {});
+    bfConditioned = false;
+  }
+
   // write ONE generic per-tank entity the app + notifications read
   await fetch(`${HA_URL}/api/states/sensor.${tankId}_derived`, {
     method: 'POST', headers: H,
     body: JSON.stringify({
       state: d.alerts[0]?.label || (d.fermentationStarted ? 'fermenting' : 'nominal'),
-      attributes: { friendly_name: `${tankId} derived`, tank: tankId, ...d },
+      attributes: { friendly_name: `${tankId} derived`, tank: tankId, ...d, dryHop: dryHopped, bfStatus: facts?.status ?? null, bfConditioned },
     }),
   }).catch((e) => console.error(`[${tankId}] derived write failed:`, e.message));
 

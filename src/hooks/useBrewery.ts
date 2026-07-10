@@ -451,6 +451,8 @@ interface AssignmentInputs {
   tiltGravityAgeMin: number | null;    // minutes since last Tilt reading
   stableDays: number | null;           // days gravity has held terminal-stable
   terminalConfirmed: boolean;          // stable ≥ required window (3d, 6d dry-hop)
+  dryHop: boolean;                     // recipe has a dry-hop step (from Brewfather)
+  bfConditioned: boolean;              // runner auto-advanced BF → Conditioning
 }
 
 function useTankAssignmentInputs(cfg: TankConfig): AssignmentInputs {
@@ -489,6 +491,8 @@ function useTankAssignmentInputs(cfg: TankConfig): AssignmentInputs {
       tiltGravityAgeMin: numAttr(a.gravityAgeMin),
       stableDays: numAttr(a.stableDays),
       terminalConfirmed: a.terminalConfirmed === true,
+      dryHop: a.dryHop === true,
+      bfConditioned: a.bfConditioned === true,
     };
   }, [tilt?.state, tilt?.last_changed, batch?.state, batch?.last_changed, fg?.state,
       derived?.state, derived?.attributes]);
@@ -524,7 +528,8 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
   const batches = tanks.map((tank, i) => {
     const { tiltSel, batchSel, expectedFg, assignedAt,
       fermentationStarted, projectedFgReach, paceVsSchedule, alerts: tankAlerts,
-      gravityDropFromPeak, tiltGravityAgeMin, stableDays, terminalConfirmed } = assignments[i];
+      gravityDropFromPeak, tiltGravityAgeMin, stableDays, terminalConfirmed,
+      dryHop, bfConditioned } = assignments[i];
 
     // "None"/"none" (either casing) both mean "no Tilt assigned" — the HA
     // helper uses 'None', batch helpers use 'none'; tolerate both.
@@ -570,6 +575,8 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
       composed.tiltGravityAgeMin = tiltGravityAgeMin;
       composed.stableDays = stableDays;
       composed.terminalConfirmed = terminalConfirmed;
+      composed.dryHop = dryHop;
+      composed.bfConditioned = bfConditioned;
 
       // Assemble alerts: the tank-scoped HA sensors + signal-lost (resolved via
       // the assigned Tilt color) + the app's OWN client-side suspect check (in
