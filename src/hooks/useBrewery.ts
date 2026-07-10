@@ -646,8 +646,13 @@ export function useSyncBatchOptions(): void {
 
   useEffect(() => {
     // wait until Brewfather has actually reported (empty data early in load
-    // shouldn't nuke everyone's options to just ['None'])
+    // shouldn't nuke everyone's options to just ['None']). Also require at least
+    // one FERMENTING batch before touching options — on an HA reboot Brewfather
+    // often re-reports with an empty/partial fermenting set for a moment, and
+    // reconciling against that is what wiped selections. No fermenting names yet
+    // → do nothing (never a reason to shrink options that would drop a selection).
     if (bfBatches.length === 0) return;
+    if (fermentingNames.length === 0) return;
 
     TANKS.forEach((cfg, i) => {
       const h = batchHelpers[i];
@@ -670,7 +675,9 @@ export function useSyncBatchOptions(): void {
       const setDiffers =
         curOpts.length !== desired.length || desired.some((o) => !curSet.has(o));
       if (setDiffers) {
-        a.setBatchOptions(cfg.id, desired);
+        // pass the current selection so set_options can RE-SELECT it afterward
+        // (HA's set_options otherwise resets the pointer to None → the reboot bug).
+        a.setBatchOptions(cfg.id, desired, curSel);
       }
 
       // 2) DEPARTURE — only a CONFIRMED transition: the previously-selected batch

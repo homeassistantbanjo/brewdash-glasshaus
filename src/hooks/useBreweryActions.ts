@@ -45,9 +45,19 @@ export function useBreweryActions() {
   );
 
   return {
-    /** Replace a tank's batch-helper options wholesale (background reconcile). */
-    setBatchOptions: (t: string, options: string[]) =>
-      callQuiet('input_select', 'set_options', `input_select.${t}_batch`, { options }),
+    /** Replace a tank's batch-helper options wholesale (background reconcile).
+     *  HA's input_select.set_options RESETS the current selection to the first
+     *  option as a side effect — so if a real batch is selected, we re-select it
+     *  immediately after. Without this, syncing options on reconnect/reboot wiped
+     *  the assignment (the recurring "tanks lose their batch on reboot" bug). */
+    setBatchOptions: async (t: string, options: string[], keepSelection?: string) => {
+      await callQuiet('input_select', 'set_options', `input_select.${t}_batch`, { options });
+      const keep = keepSelection && keepSelection !== 'None' && keepSelection !== 'none'
+        ? keepSelection : null;
+      if (keep && options.includes(keep)) {
+        await callQuiet('input_select', 'select_option', `input_select.${t}_batch`, { option: keep });
+      }
+    },
     setStatus: (t: string, v: string) =>
       call('input_select', 'select_option', `input_select.${t}_status`, { option: v }, `${label(t)} status → ${v}`),
     setTilt: (t: string, v: string) =>
