@@ -337,6 +337,9 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
               <span style={{ color: theme.color.purple }}>{batch!.tiltColor.toUpperCase()} TILT</span>
             </>}
           </div>
+          {/* prominent STAGE badge — where the beer is in the ferment→package arc,
+              so it's not just a small header word. Shows the readiness call. */}
+          <StageBadge batch={batch!} programPhase={programPhase} accent={accent} />
         </div>
       )}
 
@@ -533,6 +536,32 @@ function phaseGuess(b: ActiveBatch): string {
   if (b.attenuation < 60) return 'ACTIVE';
   if (b.attenuation < 78) return 'SLOWING';
   return 'TERMINAL';
+}
+/** Prominent STAGE badge — a labeled band showing where the beer is in the arc
+ *  (LAG→ACTIVE→SLOWING→TERMINAL→STABLE, or the active program's phase) plus the
+ *  readiness call, so "where is this beer" is obvious without reading the header. */
+function StageBadge({ batch, programPhase, accent }: { batch: ActiveBatch; programPhase: string | null; accent: string }) {
+  const stage = programPhase ? programPhase.toUpperCase() : phaseGuess(batch);
+  // readiness sub-text driven by the real stability signals
+  let sub: string; let color = accent;
+  if (programPhase) { sub = 'running program'; }
+  else if (batch.terminalConfirmed) { sub = `stable ${batch.stableDays ?? ''}d · ready for conditioning`; color = theme.color.green; }
+  else if (stage === 'TERMINAL' || batch.stableDays != null) { sub = `at terminal · confirming stability (${batch.stableDays ?? 0}/3d)`; color = theme.color.cyan; }
+  else if (stage === 'SLOWING') { sub = 'attenuation slowing'; }
+  else if (stage === 'ACTIVE') { sub = 'active fermentation'; color = theme.color.green; }
+  else if (stage === 'LAG') { sub = 'lag / getting started'; }
+  else sub = '';
+  return (
+    <div style={{
+      marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+      padding: '5px 12px', borderRadius: theme.radius.sm,
+      border: `1px solid ${hexA(color, 0.4)}`, background: hexA(color, 0.08),
+    }}>
+      <span style={{ fontFamily: theme.font.mono, fontSize: 9, letterSpacing: 1.5, color: theme.color.textFaint, textTransform: 'uppercase' }}>Stage</span>
+      <span style={{ fontFamily: theme.font.mono, fontSize: 13, fontWeight: 700, letterSpacing: 1, color, textShadow: `0 0 8px ${hexA(color, 0.4)}` }}>{stage}</span>
+      {sub && <span style={{ fontFamily: theme.font.sans, fontSize: 11, color: theme.color.textDim }}>· {sub}</span>}
+    </div>
+  );
 }
 function idleNote(tank: Tank): string {
   if (tank.status === 'Dirty') return tank.daysSinceCleaned != null ? `Dirty ${tank.daysSinceCleaned}d — clean it` : 'Needs cleaning';

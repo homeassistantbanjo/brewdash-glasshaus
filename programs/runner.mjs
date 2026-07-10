@@ -288,11 +288,17 @@ async function deriveTank(tankId, by) {
   const statLegacy = num(s('sensor.tilt_gravity_24h_stat'));          // SG/day (un-prefixed Black)
   const deltaLegacy = num(s('sensor.gravity_24h_delta'));             // already pts/day
   const own = windowSlopePts(tankId);                                 // pts/day, self-computed
+  // Prefer a real HA stat reading; a value of 0/-0 is LEGITIMATE (a terminal beer's
+  // 24h change genuinely IS ~0 — that's the "flat" signal, not a bug). Only treat a
+  // NULL/missing source as untrusted. Fall back to the self-computed window slope
+  // ONLY when every HA source is absent AND we have enough of our own samples.
   let delta;
-  if (statPerColor != null && statPerColor !== 0) delta = statPerColor * 1000;
-  else if (statLegacy != null && statLegacy !== 0) delta = statLegacy * 1000;
-  else if (deltaLegacy != null && deltaLegacy !== 0) delta = deltaLegacy;
-  else delta = own;  // HA stats are 0/absent (e.g. truncated) → trust our own slope
+  if (statPerColor != null) delta = statPerColor * 1000;
+  else if (statLegacy != null) delta = statLegacy * 1000;
+  else if (deltaLegacy != null) delta = deltaLegacy;
+  else delta = own;
+  // normalize -0 → 0 so downstream |delta|<1 flat-checks read cleanly
+  if (delta === 0) delta = 0;
 
   // per-tank persisted state — HYDRATED from HA helpers so it survives an HA
   // reboot AND a container redeploy (in-memory alone dies on both). The helpers

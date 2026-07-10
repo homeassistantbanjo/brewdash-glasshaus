@@ -37,9 +37,11 @@ function gatherTank(by, tankId) {
   const attrs = derived?.attributes || {};
 
   const tankStatus = s(`input_select.${tankId}_status`);
-  const batchSel = s(`input_select.${tankId}_batch`);
+  // batch is now stored as the batch NUMBER in input_text.tank_N_batch (migrated
+  // off the old input_select). 'unknown' is HA's default empty input_text value.
+  const batchSel = s(`input_text.${tankId}_batch`);
   const tiltSel = s(`input_select.${tankId}_tilt`);
-  const active = usable(batchSel) && batchSel !== 'None' &&
+  const active = usable(batchSel) && !['None', 'none', 'unknown'].includes(batchSel) &&
     tankStatus !== 'Ready' && tankStatus !== 'Dirty' && tankStatus !== 'Out of service';
 
   // resolve OG etc. from the assigned batch (name OR batchNo match)
