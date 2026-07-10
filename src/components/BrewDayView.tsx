@@ -10,6 +10,8 @@
 import { useEffect, useState } from 'react';
 import { theme, hexA, fx } from '../theme/tokens';
 import { BREWFATHER_URL } from '../config';
+import { useAllTanks } from '../hooks/useBrewery';
+import { useBreweryActions } from '../hooks/useBreweryActions';
 
 interface BdBatch { _id: string; batchNo: number; name: string; status: string }
 
@@ -32,8 +34,11 @@ export function BrewDayView() {
   // Batch list comes from the CONTAINER (Brewfather API, Planning + Brewing) — HA's
   // integration only surfaces active fermentations, so it wouldn't show brew-day
   // batches. Once a batch goes Fermenting it drops out (past brew day).
+  const tanks = useAllTanks();
+  const actions = useBreweryActions();
   const [active, setActive] = useState<BdBatch[]>([]);
   const [listErr, setListErr] = useState<string | null>(null);
+  const [assignMsg, setAssignMsg] = useState<string | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>({});
   const [state, setState] = useState<{ loading: boolean; msg: string | null; err: string | null }>(
@@ -112,6 +117,19 @@ export function BrewDayView() {
     } finally { setStatusBusy(false); }
   };
 
+  // fermenters that can take a batch = Ready (clean & empty), with a controller
+  const readyTanks = tanks.filter((t) => t.status === 'Ready' && t.hasController);
+
+  // assign the selected batch to a fermenter: batch→tank + tank Fermenting + Tilt.
+  const assignToTank = async (tankId: string, tankLabel: string, tilt: string) => {
+    if (!selected) return;
+    setAssignMsg(null);
+    await actions.setBatch(tankId, String(selected.batchNo)); // free-text batchNo
+    if (tilt && tilt !== 'None') await actions.setTilt(tankId, tilt);
+    await actions.setStatus(tankId, 'Fermenting');
+    setAssignMsg(`${prep?.name || 'Batch'} → ${tankLabel}${tilt && tilt !== 'None' ? ` · ${tilt} Tilt` : ''} (now Fermenting).`);
+  };
+
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14, paddingRight: 4 }}>
       <div style={{ fontFamily: theme.font.mono, fontSize: 12, letterSpacing: 1, color: theme.color.textLabel, textTransform: 'uppercase' }}>
@@ -176,6 +194,16 @@ export function BrewDayView() {
               Status: <span style={{ color: theme.color.cyan }}>{selected.status}</span>
               {selected.status === 'Brewing' && ' — brewing in progress'}
             </div>
+          )}
+
+          {/* ASSIGN TO FERMENTER — after the boil, put the batch in a Ready tank.
+              Sets batch→tank + tank Fermenting + the Tilt going in it (GlassHaus side;
+              Brewfather's own device-attach is a separate manual step in BF settings). */}
+          {selected && (
+            <AssignToFermenter
+              readyTanks={readyTanks}
+              onAssign={assignToTank}
+              msg={assignMsg} />
           )}
 
           {/* PREP — recipe bill for weighing out (read-only, from Brewfather) */}
@@ -327,6 +355,72 @@ function PrepSection({ prep }: { prep: any }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * ASSIGN TO FERMENTER — the brew-day handoff: pick a Ready (clean, empty) tank and
+ * the Tilt going in it, then confirm. Writes batch→tank + Tilt + tank Fermenting.
+ * Note: Brewfather's own Tilt/device attach is a separate manual step in Brewfather
+ * settings — the API can't set it, so this only handles the GlassHaus side.
+ */
+function AssignToFermenter({ readyTanks, onAssign, msg }: {
+  readyTanks: { id: string; label: string }[];
+  onAssign: (tankId: string, label: string, tilt: string) => void;
+  msg: string | null;
+}) {
+  const [tankId, setTankId] = useState<string | null>(null);
+  const [tilt, setTilt] = useState('None');
+  const [busy, setBusy] = useState(false);
+  const tank = readyTanks.find((t) => t.id === tankId);
+  const TILTS = ['None', 'Black', 'Red', 'Blue', 'Green', 'Orange', 'Purple', 'Pink', 'Yellow'];
+
+  const pill = (on: boolean): React.CSSProperties => ({
+    fontFamily: theme.font.mono, fontSize: 12, padding: '7px 12px', cursor: 'pointer', clipPath: clip,
+    borderRadius: clip ? 0 : 8,
+    border: `1px solid ${on ? theme.color.cyan : theme.color.panelBorder}`,
+    background: on ? hexA(theme.color.cyan, 0.15) : theme.color.inset,
+    color: on ? theme.color.cyan : theme.color.textDim,
+  });
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ fontFamily: theme.font.mono, fontSize: 11, letterSpacing: 1.5, color: theme.color.textFaint, textTransform: 'uppercase' }}>
+        ⌐ Assign to Fermenter
+      </div>
+      {readyTanks.length === 0 ? (
+        <div style={{ fontFamily: theme.font.sans, fontSize: 12.5, color: theme.color.textDim }}>
+          No fermenters are Ready. Clean/free a tank (set it Ready in ⚙ Manage) to assign this batch.
+        </div>
+      ) : (
+        <>
+          <div style={{ fontFamily: theme.font.sans, fontSize: 11, color: theme.color.textLabel }}>1 · Pick a ready fermenter</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {readyTanks.map((t) => (
+              <button key={t.id} onClick={() => setTankId(t.id)} style={pill(t.id === tankId)}>{t.label}</button>
+            ))}
+          </div>
+          {tankId && <>
+            <div style={{ fontFamily: theme.font.sans, fontSize: 11, color: theme.color.textLabel, marginTop: 4 }}>
+              2 · Which Tilt is going in? <span style={{ color: theme.color.textFaint }}>(GlassHaus mapping; attach the device in Brewfather separately)</span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {TILTS.map((c) => (
+                <button key={c} onClick={() => setTilt(c)} style={pill(c === tilt)}>{c}</button>
+              ))}
+            </div>
+            <button disabled={busy} onClick={async () => { setBusy(true); await onAssign(tankId, tank!.label, tilt); setBusy(false); setTankId(null); }}
+              style={{
+                alignSelf: 'flex-start', marginTop: 6, fontFamily: theme.font.mono, fontSize: 12, letterSpacing: 1,
+                textTransform: 'uppercase', padding: '9px 18px', cursor: busy ? 'wait' : 'pointer', clipPath: clip,
+                borderRadius: clip ? 0 : 8, border: `1px solid ${theme.color.green}`,
+                background: hexA(theme.color.green, 0.16), color: theme.color.green, boxShadow: theme.glow(theme.color.green, 0.25),
+              }}>{busy ? 'Assigning…' : `▸ Put in ${tank!.label}${tilt !== 'None' ? ` · ${tilt} Tilt` : ''}`}</button>
+          </>}
+        </>
+      )}
+      {msg && <span style={{ fontFamily: theme.font.sans, fontSize: 13, color: theme.color.green }}>✓ {msg}</span>}
     </div>
   );
 }
