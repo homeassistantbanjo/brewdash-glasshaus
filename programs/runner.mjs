@@ -65,6 +65,9 @@ async function tickTank(tankId, by) {
     apparentAttenuationPct: numOr(s('sensor.apparent_attenuation')),
     progressToFgPct: numOr(s('sensor.attenuation_progress')),
     gravity24hDeltaPts: numOr(s('sensor.gravity_24h_delta')),
+    // the assigned batch's strain expected attenuation (Brewfather yeast spec) —
+    // drives the attenuationOfExpected advance type in Claude-generated plans.
+    expectedAttenuationPct: expectedAttenuationFor(tankId, by),
   };
 
   // ADOPT an in-progress ferment: on a FRESH start (phase 0, just set) jump to the
@@ -131,11 +134,53 @@ function resolveProgram(key, by, tankId) {
     'Cold crash only': 'coldcrash' };
   if (PRESETS[key]) return PRESETS[key];
   if (map[key]) return PRESETS[map[key]];
-  if (key === 'Custom') {
-    // custom program stored as JSON in an input_text attribute (future); skip for now
-    return null;
+  // A Claude-GENERATED (or hand-edited) plan lives as JSON in input_text.tank_N_
+  // program_plan (reboot-proof). Same shape as a preset: { label, clamp, phases }.
+  if (key === 'Generated' || key === 'Custom') {
+    const raw = by[`input_text.${tankId}_program_plan`]?.state;
+    return parsePlan(raw);
   }
   return null;
+}
+
+/** The assigned batch's strain expected attenuation %. The HA Brewfather
+ *  integration STRIPS recipe.yeasts, so we can't read it live here — instead it's
+ *  baked into the generated plan at creation time (the container has full yeast
+ *  data via complete=true) and read back from the running plan's `expectedAtten`.
+ *  Returns null if no generated plan / not carried → attenuationOfExpected treats
+ *  its pct as absolute. */
+function expectedAttenuationFor(tankId, by) {
+  const key = by[`input_select.${tankId}_program`]?.state;
+  if (key !== 'Generated' && key !== 'Custom') return null;
+  const plan = parsePlan(by[`input_text.${tankId}_program_plan`]?.state);
+  return plan?.expectedAtten ?? null;
+}
+
+/** Parse + validate a stored plan JSON into a program the engine accepts. Returns
+ *  null (engine skips the tank) on anything malformed — never runs a bad plan. */
+function parsePlan(raw) {
+  if (!raw || raw === 'unknown' || raw === 'unavailable' || raw === '') return null;
+  let p; try { p = JSON.parse(raw); } catch { return null; }
+  if (!p || !Array.isArray(p.phases) || p.phases.length === 0) return null;
+  const clamp = (p.clamp && Number.isFinite(p.clamp.minF) && Number.isFinite(p.clamp.maxF))
+    ? { minF: p.clamp.minF, maxF: p.clamp.maxF }
+    : { minF: 32, maxF: 75 }; // safe default if the plan omitted/mangled the clamp
+  const KINDS = ['hold', 'ramp', 'wait', 'coldCrash'];
+  const phases = p.phases.filter((ph) => ph && KINDS.includes(ph.kind)).map((ph) => ({
+    name: String(ph.name || ph.kind),
+    kind: ph.kind,
+    tempF: Number.isFinite(ph.tempF) ? ph.tempF : undefined,
+    targetF: Number.isFinite(ph.targetF) ? ph.targetF : undefined,
+    stepF: Number.isFinite(ph.stepF) ? ph.stepF : undefined,
+    everyHours: Number.isFinite(ph.everyHours) ? ph.everyHours : undefined,
+    hours: Number.isFinite(ph.hours) ? ph.hours : undefined,
+    advance: ph.advance || undefined,
+    // ANY cold-crash phase is force-gated regardless of what the plan said — safety.
+    requiresConfirm: ph.kind === 'coldCrash' ? true : !!ph.requiresConfirm,
+  }));
+  if (!phases.length) return null;
+  const expectedAtten = Number.isFinite(p.expectedAtten) ? p.expectedAtten : null;
+  return { label: String(p.label || 'Generated plan'), clamp, phases, expectedAtten, generated: true };
 }
 
 // track crash-confirm presses + per-phase start setpoints + adopt-once guard between ticks

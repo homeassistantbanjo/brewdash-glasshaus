@@ -14,6 +14,20 @@ ok('rate limit down cap', _internals.rateLimit(50,66)===61);
 
 const lm=PRESETS.lager_modern;
 let r=tick(lm,{phaseIndex:0,phaseElapsedHours:20,currentSetpointF:64,apparentAttenuationPct:40,gravity:1.030,expectedFg:1.010,gravity24hDeltaPts:-8});
+// --- attenuationOfExpected (strain-relative advance for Claude-generated plans) ---
+const cm = _internals.conditionMet;
+// US-05 expected 81%; "advance at 80% of expected" = 64.8% absolute AA
+ok('attnOfExpected: 60% AA of exp81 → not yet (needs 64.8)',
+   cm({type:'attenuationOfExpected',pct:80},{apparentAttenuationPct:60,expectedAttenuationPct:81})===false);
+ok('attnOfExpected: 66% AA of exp81 → advance (past 64.8)',
+   cm({type:'attenuationOfExpected',pct:80},{apparentAttenuationPct:66,expectedAttenuationPct:81})===true);
+// low-attenuating strain (say 68%): 80% of 68 = 54.4 — SAME pct, different absolute (the point)
+ok('attnOfExpected self-adjusts: 55% AA of exp68 → advance',
+   cm({type:'attenuationOfExpected',pct:80},{apparentAttenuationPct:55,expectedAttenuationPct:68})===true);
+ok('attnOfExpected: null expected → treat pct as absolute (55<80 no)',
+   cm({type:'attenuationOfExpected',pct:80},{apparentAttenuationPct:55,expectedAttenuationPct:null})===false);
+ok('attnOfExpected: null AA → false', cm({type:'attenuationOfExpected',pct:80},{apparentAttenuationPct:null,expectedAttenuationPct:81})===false);
+
 ok('lager hold 64 while <50% atten', r.setpointF===64 && r.advanceTo===null);
 r=tick(lm,{phaseIndex:0,phaseElapsedHours:20,currentSetpointF:64,apparentAttenuationPct:52,gravity:1.028,expectedFg:1.010,gravity24hDeltaPts:-8});
 ok('lager advances at 50% atten', r.advanceTo===1);

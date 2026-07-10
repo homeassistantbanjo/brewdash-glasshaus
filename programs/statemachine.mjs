@@ -31,6 +31,16 @@ function conditionMet(cond, s, adopting = false) {
   switch (cond.type) {
     case 'attenuation':
       return s.apparentAttenuationPct != null && s.apparentAttenuationPct >= cond.pct;
+    case 'attenuationOfExpected': {
+      // advance when apparent attenuation reaches cond.pct% OF THIS STRAIN'S expected
+      // attenuation (from the Brewfather yeast spec) — self-adjusting per strain, so
+      // "80%" means 80% of US-05's 81% (≈65% AA), not an absolute 80%. Falls back to
+      // treating cond.pct as absolute if the strain's expected attenuation is unknown.
+      if (s.apparentAttenuationPct == null) return false;
+      const exp = s.expectedAttenuationPct;
+      const threshold = (exp != null && exp > 0) ? (cond.pct / 100) * exp : cond.pct;
+      return s.apparentAttenuationPct >= threshold;
+    }
     case 'progressToFg':
       return s.progressToFgPct != null && s.progressToFgPct >= cond.pct;
     case 'elapsed':
