@@ -281,6 +281,43 @@ export function useInsight(): Insight | null {
   }, [e?.state, e?.last_changed, e?.attributes]);
 }
 
+/** Plant/component HEALTH (from the programs container's sensor.glasshaus_health):
+ *  infra observability — sensor staleness, Kasa/Inkbird disconnects, glycol health,
+ *  temp-controller liveness. Separate from per-tank BEER alerts. null-safe. */
+export interface HealthAlert {
+  key: string;
+  severity: 'critical' | 'warning';
+  label: string;
+  detail?: string;
+  entityId?: string;
+}
+export interface PlantHealth {
+  critical: number;
+  warnings: number;
+  alerts: HealthAlert[];
+  /** epoch ms of the last heartbeat; stale → programs container may be down */
+  heartbeatAgeMin: number | null;
+}
+export function useHealth(): PlantHealth {
+  const e = safeEntity(PLANT.health);
+  return useMemo(() => {
+    const a = (e?.attributes as any) || {};
+    const raw = Array.isArray(a.alerts) ? a.alerts : [];
+    const alerts: HealthAlert[] = raw.map((x: any) => ({
+      key: String(x.key ?? x.label), severity: x.severity === 'critical' ? 'critical' : 'warning',
+      label: String(x.label ?? ''), detail: x.detail ? String(x.detail) : undefined,
+      entityId: x.entityId ? String(x.entityId) : undefined,
+    }));
+    const hb = a.heartbeat ? Date.parse(a.heartbeat) : NaN;
+    return {
+      critical: Number(a.critical) || 0,
+      warnings: Number(a.warnings) || 0,
+      alerts,
+      heartbeatAgeMin: Number.isFinite(hb) ? Math.round((Date.now() - hb) / 60000) : null,
+    };
+  }, [e?.state, e?.last_changed, e?.attributes]);
+}
+
 /** Plant-wide glycol chiller diagnostics (shared loop, NOT per-tank): compressor
  *  cycles in the last hour (short-cycling signal) + total runtime over 7 days.
  *  Surfaced in the top strip next to the chiller chip. null when sensor absent. */

@@ -13,6 +13,7 @@
 import { PRESETS } from './presets.mjs';
 import { tick, resolveStartPhase } from './statemachine.mjs';
 import { computeDerived } from './derived.mjs';
+import { computeHealth } from './monitor.mjs';
 
 const HA_URL = req('HA_URL');
 const HA_TOKEN = req('HA_TOKEN');
@@ -493,9 +494,35 @@ async function tickAll() {
     for (const t of TANKS) await deriveTank(t, by).catch((e) => console.error(`[${t}] derive:`, e.message));
     // program control (writes setpoints) — unchanged
     for (const t of TANKS) await tickTank(t, by);
+    // OBSERVABILITY: plant/component health (infra staleness, disconnects, glycol).
+    // Read-only; write sensor.glasshaus_health for the notify automation + app.
+    await writeHealth(by).catch((e) => console.error('[health] write failed:', e.message));
   } catch (e) {
     console.error('[programs] tick failed:', e.message);
   }
+}
+
+async function writeHealth(by) {
+  const { alerts, checkedCount } = computeHealth(by, Date.now(), TANKS);
+  const worst = alerts[0]?.severity ?? null;
+  // state summarizes at a glance: OK / N warnings / N critical
+  const nCrit = alerts.filter((a) => a.severity === 'critical').length;
+  const nWarn = alerts.filter((a) => a.severity === 'warning').length;
+  const state = nCrit ? `${nCrit} critical` : nWarn ? `${nWarn} warning` : 'ok';
+  await fetch(`${HA_URL}/api/states/sensor.glasshaus_health`, {
+    method: 'POST', headers: H,
+    body: JSON.stringify({
+      state,
+      attributes: {
+        friendly_name: 'GlassHaus Health',
+        // heartbeat: this timestamp advances every tick. An HA automation can watch
+        // it going stale to detect the programs container itself being DEAD (a dead
+        // container can't self-report — HA must catch that from the outside).
+        heartbeat: new Date().toISOString(),
+        worst, critical: nCrit, warnings: nWarn, checkedCount, alerts,
+      },
+    }),
+  });
 }
 
 console.log(`[programs] runner up. tick every ${TICK_MINUTES}min. DRY_RUN=${DRY_RUN}. tanks=${TANKS}`);

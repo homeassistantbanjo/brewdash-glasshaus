@@ -105,6 +105,10 @@ export const PLANT = {
   // LLM insight entity written by the analyzer container (state=headline;
   // attrs: severity, detail, action). Null-safe: absent until the analyzer runs.
   insight: 'sensor.glasshaus_insight',
+  // Component/plant HEALTH written by the programs container's monitor each tick
+  // (attrs: critical, warnings, alerts[], heartbeat). Infra observability —
+  // staleness, disconnects, glycol health, temp-controller liveness.
+  health: 'sensor.glasshaus_health',
 } as const;
 
 /**

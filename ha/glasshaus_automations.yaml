@@ -152,3 +152,81 @@ automation:
               {{ 'high' if state_attr('sensor.glasshaus_insight','severity')=='problem' else 'default' }}
             notification_icon: "mdi:brain"
             clickAction: "http://192.168.50.118:8099/"
+
+  # ---------------------------------------------------------------------------
+  # OBSERVABILITY — plant/component health → phone. The programs container writes
+  # sensor.glasshaus_health each tick (infra staleness, disconnects, glycol, per-
+  # tank temp-controller liveness). Notify when the CRITICAL/WARNING alert SET
+  # changes, so a newly-frozen sensor or a dropped Kasa/Inkbird plug pages you —
+  # the failures that used to sit silent for hours. (programs container.)
+  # ---------------------------------------------------------------------------
+  - id: gh_notify_health_alert
+    alias: "GlassHaus • Component health → phone"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: sensor.glasshaus_health
+    conditions:
+      - condition: template
+        value_template: >
+          {% set now_keys = (state_attr(trigger.entity_id,'alerts') or [])
+                             | map(attribute='key') | list %}
+          {% set old_keys = (trigger.from_state.attributes.alerts if trigger.from_state else [])
+                             | default([], true) | map(attribute='key') | list %}
+          {{ now_keys | length > 0 and now_keys != old_keys }}
+    actions:
+      - variables:
+          top: "{{ (state_attr(trigger.entity_id,'alerts') or [])[0] }}"
+          crit: "{{ state_attr(trigger.entity_id,'critical') | int(0) }}"
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: "{{ '🚨' if top.severity == 'critical' else '⚠️' }} GlassHaus — {{ top.label }}"
+          message: >
+            {{ top.label }}: {{ top.detail }}.
+            {% set n = state_attr(trigger.entity_id,'critical') | int(0)
+                     + (state_attr(trigger.entity_id,'warnings') | int(0)) %}
+            {% if n > 1 %}(+{{ n - 1 }} more){% endif %}
+          data:
+            tag: gh_health
+            channel: GlassHaus Health
+            importance: "{{ 'high' if top.severity == 'critical' else 'default' }}"
+            notification_icon: "mdi:heart-pulse"
+            clickAction: "http://192.168.50.118:8099/"
+
+  # ---------------------------------------------------------------------------
+  # CONTAINER LIVENESS — a dead programs container can't report its own death, so
+  # HA watches from OUTSIDE: sensor.glasshaus_health carries a `heartbeat` attr
+  # that advances every tick (5min). If it stops advancing for >15min the runner
+  # is down (crash / Unraid reboot / image pull hang) → page. Uses a template that
+  # compares the heartbeat attr age; trigger on a periodic time pattern.
+  # ---------------------------------------------------------------------------
+  - id: gh_notify_health_stale
+    alias: "GlassHaus • Health heartbeat stale (programs container down) → phone"
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: template
+        value_template: >
+          {% set hb = state_attr('sensor.glasshaus_health','heartbeat') %}
+          {% if hb is none %}
+            {{ states('sensor.glasshaus_health') not in ['unknown','unavailable'] }}
+          {% else %}
+            {{ (now() - as_datetime(hb)).total_seconds() > 900 }}
+          {% endif %}
+    actions:
+      - action: notify.mobile_app_jordans_phone
+        data:
+          title: "🚨 GlassHaus — programs container silent"
+          message: >
+            No health heartbeat in
+            {% set hb = state_attr('sensor.glasshaus_health','heartbeat') %}
+            {% if hb %}{{ ((now() - as_datetime(hb)).total_seconds() / 60) | round }}m{% else %}(never seen){% endif %}.
+            The programs runner may be down — tanks are uncontrolled.
+          data:
+            tag: gh_health_heartbeat
+            channel: GlassHaus Health
+            importance: high
+            notification_icon: "mdi:heart-broken"
+            clickAction: "http://192.168.50.118:8099/"

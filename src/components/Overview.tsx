@@ -10,7 +10,7 @@ import { BrewDayView } from './BrewDayView';
 import { InsightPanel } from './InsightPanel';
 import { ThemeSwitcher } from './ThemeSwitcher';
 import { theme, stateColor, hexA, useThemeName } from '../theme/tokens';
-import { useActiveBatches, useGlycol, useEquipment, usePlantDiag, useInsight } from '../hooks/useBrewery';
+import { useActiveBatches, useGlycol, useEquipment, usePlantDiag, useInsight, useHealth } from '../hooks/useBrewery';
 import { Tank, isActiveBrew } from '../types/domain';
 import logo from '../assets/iconoclast-logo.jpg';
 
@@ -20,6 +20,7 @@ export function Overview() {
   const equipment = useEquipment();
   const plantDiag = usePlantDiag();
   const insight = useInsight();
+  const health = useHealth();
   useThemeName(); // re-render this whole view when the theme switches
   // (batch options are no longer synced to an input_select — batch is stored as
   //  free text (batchNo) and the picker builds its list live from Brewfather, so
@@ -126,7 +127,7 @@ export function Overview() {
 
       {/* Top alert bar — collapses to nothing when all-clear. Clicking a chip
           highlights the offending card. */}
-      <AlertBar tanks={tanks} batches={batches} onFocus={focusCard} />
+      <AlertBar tanks={tanks} batches={batches} health={health} onFocus={focusCard} />
 
       {/* ONE unified plant strip: glycol hero on the left + equipment chips
           inline on the right. Merged from two stacked bands into one to reclaim
