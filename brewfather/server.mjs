@@ -80,6 +80,13 @@ async function resolveId(batchIdOrNo) {
   const s = String(batchIdOrNo);
   // a real _id is long + non-numeric; a batchNo is a short integer
   if (!/^\d{1,6}$/.test(s)) return s;
+  // brew-day batches (Planning/Brewing) are the primary use; check those first
+  // (this is also what the picker offered), then fall back to the general list.
+  try {
+    const bd = await bfBrewDayBatches();
+    const hitBd = bd.find((b) => String(b.batchNo) === s);
+    if (hitBd) return hitBd._id;
+  } catch { /* fall through */ }
   const list = await bfListBatches();
   const hit = list.find((b) => String(b.batchNo) === s);
   if (!hit) throw new Error(`no Brewfather batch with number ${s}`);
