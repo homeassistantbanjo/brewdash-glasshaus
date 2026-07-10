@@ -409,7 +409,12 @@ async function deriveTank(tankId, by) {
     await callService('input_boolean', 'turn_off', { entity_id: `input_boolean.${tankId}_bf_conditioned` }).catch(() => {});
   }
   const flipLatchOn = sameBatch && s(`input_boolean.${tankId}_bf_conditioned`) === 'on';
-  let bfConditioned = flipLatchOn;
+  // bfConditioned reflects the AUTHORITATIVE Brewfather status (Conditioning or
+  // later), not just our latch — so the app's "✓ Conditioning" confirmation is
+  // correct even if the HA latch helper isn't installed, and it follows a manual
+  // BF change. The latch is only the re-fire guard.
+  const CONDITIONED_OR_LATER = ['Conditioning', 'Completed', 'Archived'];
+  let bfConditioned = flipLatchOn || (facts?.status ? CONDITIONED_OR_LATER.includes(facts.status) : false);
   if (d.terminalConfirmed && !flipLatchOn && BF_URL && batchSel && facts?.status === 'Fermenting') {
     try {
       const r = await fetch(`${BF_URL}/batch/${encodeURIComponent(batchSel)}/status`, {
