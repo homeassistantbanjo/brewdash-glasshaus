@@ -622,8 +622,15 @@ function useConditioningBatchFallback(
           });
           if (!r.ok) continue;
           const j = await r.json();
-          // shape into a BrewfatherBatch (no readings — gravity is flat in
-          // conditioning, so the sparkline/history simply isn't needed here).
+          // shape into a BrewfatherBatch. history comes from the container's
+          // readings fetch — a conditioning batch still has its full fermentation
+          // curve, which the Graphs view + card sparklines plot. (Earlier this was
+          // [] which blanked the graph the moment a batch conditioned.)
+          const hist: BatchReading[] = Array.isArray(j.history)
+            ? j.history
+                .map((r: any) => ({ t: Number(r.t), sg: Number(r.sg), tempF: Number(r.tempF) }))
+                .filter((r: BatchReading) => Number.isFinite(r.t) && Number.isFinite(r.sg) && Number.isFinite(r.tempF))
+            : [];
           results.push([key, {
             batchNo: Number(j.batchNo ?? 0),
             name: String(j.name ?? 'Unknown'),
@@ -634,7 +641,7 @@ function useConditioningBatchFallback(
             fermentingLeft: null,
             targetTemp: null,
             readingTiltId: null,
-            history: [],
+            history: hist,
           }]);
         } catch { /* leave it missing; card degrades to unassigned as before */ }
       }

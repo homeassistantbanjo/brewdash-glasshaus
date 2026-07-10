@@ -209,16 +209,34 @@ async function bfGetBatch(batchIdOrNo) {
   // decide dryHop from TRUTH (a "Dry Hop" use in the schedule) rather than guessing
   // from the batch name — the programs container uses this to set the 6d vs 3d
   // terminal-confirmation window (hop creep) and to gate the Conditioning flip.
-  const r = await fetch(`${BF}/batches/${encodeURIComponent(batchId)}?complete=true`, { headers: { Authorization: AUTH } });
+  // fetch the batch AND its readings in parallel. readings give the app the full
+  // gravity/temp CURVE so a conditioning batch (dropped from the HA feed) can still
+  // be GRAPHED — without this the fallback batch had empty history and the Graphs
+  // view showed "no fermenting batches" the moment a batch conditioned.
+  const [r, rr] = await Promise.all([
+    fetch(`${BF}/batches/${encodeURIComponent(batchId)}?complete=true`, { headers: { Authorization: AUTH } }),
+    fetch(`${BF}/batches/${encodeURIComponent(batchId)}/readings`, { headers: { Authorization: AUTH } }),
+  ]);
   if (!r.ok) throw new Error(`Brewfather HTTP ${r.status}`);
   const b = await r.json();
+  // normalize readings → { t(ms), sg, tempF }, oldest→newest, drop junk
+  let history = [];
+  if (rr.ok) {
+    const raw = await rr.json();
+    if (Array.isArray(raw)) {
+      history = raw
+        .map((x) => ({ t: Number(x.time), sg: Number(x.sg), tempF: n(x.temp) != null ? +(x.temp * 9 / 5 + 32).toFixed(1) : null }))
+        .filter((x) => Number.isFinite(x.t) && Number.isFinite(x.sg) && x.tempF != null)
+        .sort((a, z) => a.t - z.t);
+    }
+  }
   const Lto = (v) => (n(v) != null ? +(v / 3.785411784).toFixed(2) : null); // L→gal for display
   const rec = b.recipe || {};
   const hops = Array.isArray(rec.hops) ? rec.hops : [];
   const dryHop = hops.some((h) => typeof h.use === 'string' && /dry\s*hop/i.test(h.use));
   const cond = conditioningPlan(b, rec);
   return {
-    id: b._id, name: b.name, batchNo: b.batchNo, status: b.status, dryHop,
+    id: b._id, name: (rec.name || b.name), batchNo: b.batchNo, status: b.status, dryHop,
     // conditioning duration inputs + resolved target (see conditioningPlan)
     yeastType: cond.yeastType, style: cond.style,
     conditionDays: cond.conditionDays, conditionSource: cond.source,
@@ -228,6 +246,7 @@ async function bfGetBatch(batchIdOrNo) {
     og: b.measuredOg ?? b.estimatedOg ?? null,
     fermentingStart: b.fermentingStart ? Date.parse(b.fermentingStart) : null,
     fermentingEnd: b.fermentingEnd ? Date.parse(b.fermentingEnd) : null,
+    history,
     measured: {
       preBoilGravity: b.measuredPreBoilGravity ?? null,
       postBoilGravity: b.measuredPostBoilGravity ?? null,

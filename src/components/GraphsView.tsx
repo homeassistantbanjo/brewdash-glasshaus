@@ -1,7 +1,6 @@
 import { Sparkline } from './Sparkline';
 import { theme, hexA } from '../theme/tokens';
 import { useActiveBatches } from '../hooks/useBrewery';
-import { isActiveBrew } from '../types/domain';
 
 /**
  * A dedicated, roomy charts dashboard — the home for big trend graphs that the
@@ -12,9 +11,13 @@ import { isActiveBrew } from '../types/domain';
 export function GraphsView() {
   const { tanks, batches } = useActiveBatches();
 
+  // Plot ANY tank with a batch that has a gravity/temp curve — not just tanks whose
+  // status is literally Fermenting. A conditioning batch still has its full
+  // fermentation history worth graphing, and its tank may read Conditioning rather
+  // than Fermenting. Batch-with-history is the real "is there something to plot".
   const plottable = tanks
     .map((tank, i) => ({ tank, batch: batches[i] }))
-    .filter(({ tank, batch }) => isActiveBrew(tank.status) && batch && batch.history.length >= 2);
+    .filter(({ batch }) => batch && batch.history.length >= 2);
 
   if (plottable.length === 0) {
     return (
@@ -22,7 +25,7 @@ export function GraphsView() {
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontFamily: theme.font.mono, fontSize: 14, color: theme.color.textDim,
       }}>
-        No fermenting batches to graph.
+        No batches with gravity history to graph.
       </div>
     );
   }
