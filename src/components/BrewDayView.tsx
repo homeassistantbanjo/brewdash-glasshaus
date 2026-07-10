@@ -149,15 +149,17 @@ export function BrewDayView() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, maxWidth: 720 }}>
             {FIELDS.map((f) => {
               const cur = current?.measured?.[f.key];
+              const tgt = prep?.target?.[f.key];
               return (
                 <div key={f.key} style={{
                   background: theme.color.panelHi, clipPath: clip, borderRadius: clip ? 0 : theme.radius.md,
                   border: `1px solid ${theme.color.panelBorder}`, padding: '10px 12px',
                   display: 'flex', flexDirection: 'column', gap: 6,
                 }}>
-                  <label style={{ fontFamily: theme.font.sans, fontSize: 11, letterSpacing: 0.5, color: theme.color.textLabel, textTransform: 'uppercase' }}>
-                    {f.label}
-                    {cur != null && <span style={{ color: theme.color.textFaint, marginLeft: 6 }}>now: {cur}</span>}
+                  <label style={{ fontFamily: theme.font.sans, fontSize: 11, letterSpacing: 0.5, color: theme.color.textLabel, textTransform: 'uppercase', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span>{f.label}</span>
+                    {tgt != null && <span style={{ color: theme.color.cyan }}>target {tgt}</span>}
+                    {cur != null && <span style={{ color: theme.color.textFaint }}>now {cur}</span>}
                   </label>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <input type="number" inputMode="decimal" step={f.step}

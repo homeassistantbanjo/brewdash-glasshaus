@@ -190,6 +190,17 @@ async function bfRecipePrep(batchIdOrNo) {
     otherMiscs: miscs.filter((m) => m.type !== 'Water Agent').map((m) => ({ name: m.name, amount: num(m.amount), unit: m.unit || 'g', use: m.use, type: m.type })),
     water: { mashL, spargeL },
     mashSteps: (rec.mash?.steps || []).map((s) => ({ name: s.name, tempC: num(s.stepTemp), min: num(s.stepTime) })),
+    // TARGET/expected values from the recipe, so brew-day entry shows "target X" next
+    // to each field. Gravities unit-agnostic SG; volumes L→gal for the panel.
+    target: {
+      preBoilGravity: num(rec.preBoilGravity),
+      postBoilGravity: num(rec.postBoilGravity),
+      og: num(rec.og) ?? num(b.estimatedOg),
+      fg: num(rec.fg) ?? num(b.estimatedFg),
+      mashPh: num(w.mashPh),
+      boilSizeGal: num(rec.boilSize) != null ? +(rec.boilSize * 0.2641720524).toFixed(2) : null,
+      batchSizeGal: num(rec.batchSize) != null ? +(rec.batchSize * 0.2641720524).toFixed(2) : null,
+    },
   };
   });
 }
