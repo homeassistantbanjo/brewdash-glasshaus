@@ -9,13 +9,15 @@ CONFIG_FILE=/usr/share/nginx/html/config.js
 HA_URL="${VITE_HA_URL:-}"
 HA_TOKEN="${VITE_HA_TOKEN:-}"
 ANALYZER_URL="${VITE_ANALYZER_URL:-}"
+BREWFATHER_URL="${VITE_BREWFATHER_URL:-}"
 
 cat > "$CONFIG_FILE" <<EOF
 window.__GLASSHAUS_CONFIG__ = {
   haUrl: "${HA_URL}",
   haToken: "${HA_TOKEN}",
-  analyzerUrl: "${ANALYZER_URL}"
+  analyzerUrl: "${ANALYZER_URL}",
+  brewfatherUrl: "${BREWFATHER_URL}"
 };
 EOF
 
-echo "[glasshaus] wrote runtime config (haUrl=${HA_URL:-<empty>}, haToken=${HA_TOKEN:+<set>}${HA_TOKEN:-<empty>}, analyzerUrl=${ANALYZER_URL:-<default>})"
+echo "[glasshaus] wrote runtime config (haUrl=${HA_URL:-<empty>}, haToken=${HA_TOKEN:+<set>}${HA_TOKEN:-<empty>}, analyzerUrl=${ANALYZER_URL:-<default>}, brewfatherUrl=${BREWFATHER_URL:-<default>})"

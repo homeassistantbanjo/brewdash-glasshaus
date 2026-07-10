@@ -34,6 +34,10 @@ jobs:
             file: programs/Dockerfile
             context: programs
             suffix: "-programs"
+          - name: brewfather
+            file: brewfather/Dockerfile
+            context: brewfather
+            suffix: "-brewfather"
     steps:
       - uses: actions/checkout@v4
 

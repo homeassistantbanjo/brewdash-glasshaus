@@ -1,0 +1,10 @@
+{
+  "name": "glasshaus-brewfather",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GlassHaus Brewfather write service — writes brew-day measurements (gravities, pH, volumes, status) back to Brewfather via PATCH /batches/:id",
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}

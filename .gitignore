@@ -19,3 +19,6 @@ dist
 .devport
 .devserver.log
 .shots/
+
+# Brewfather API creds for local testing (never commit)
+.bf-creds

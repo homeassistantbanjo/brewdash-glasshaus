@@ -16,6 +16,7 @@ interface GlassHausConfig {
   haUrl?: string;
   haToken?: string;
   analyzerUrl?: string;
+  brewfatherUrl?: string;
 }
 
 declare global {
@@ -36,3 +37,7 @@ export const HA_TOKEN =
 // dashboard is served from, port 8091, unless overridden at runtime/build time.
 export const ANALYZER_URL =
   runtime.analyzerUrl || import.meta.env.VITE_ANALYZER_URL || 'http://192.168.50.118:8091';
+
+// The Brewfather write service container (brew-day measurement write-back), :8092.
+export const BREWFATHER_URL =
+  runtime.brewfatherUrl || import.meta.env.VITE_BREWFATHER_URL || 'http://192.168.50.118:8092';
