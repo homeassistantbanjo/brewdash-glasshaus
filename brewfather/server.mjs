@@ -97,6 +97,22 @@ async function bfListBatches() {
   _batchCache = { at: Date.now(), list };
   return list;
 }
+// resolve a batchNo → _id. Batches move through statuses (Planning→Brewing→
+// Fermenting→Conditioning→Completed), and the unfiltered ?limit=50 list can push
+// an older Fermenting batch off the end — so a batchNo we can't find in the
+// default list isn't necessarily gone. Try, in order: brew-day list (Planning/
+// Brewing), the general recent list, then an explicit per-status sweep of the
+// ACTIVE statuses (Fermenting/Conditioning) which is where auto-advance operates.
+let _statusCache = new Map();  // status → { at, list }
+async function bfBatchesByStatus(status) {
+  const hit = _statusCache.get(status);
+  if (hit && Date.now() - hit.at < 60_000) return hit.list;
+  const r = await fetch(`${BF}/batches?status=${status}&limit=50&include=batchNo,name,status`, { headers: { Authorization: AUTH } });
+  if (!r.ok) throw new Error(`Brewfather list (${status}) HTTP ${r.status}`);
+  const list = await r.json();
+  _statusCache.set(status, { at: Date.now(), list });
+  return list;
+}
 async function resolveId(batchIdOrNo) {
   const s = String(batchIdOrNo);
   // a real _id is long + non-numeric; a batchNo is a short integer
@@ -110,8 +126,17 @@ async function resolveId(batchIdOrNo) {
   } catch { /* fall through */ }
   const list = await bfListBatches();
   const hit = list.find((b) => String(b.batchNo) === s);
-  if (!hit) throw new Error(`no Brewfather batch with number ${s}`);
-  return hit._id;
+  if (hit) return hit._id;
+  // not in the default list → sweep the active statuses explicitly (a Fermenting
+  // batch older than the 50 most-recent won't appear above but is real).
+  for (const status of ['Fermenting', 'Conditioning']) {
+    try {
+      const byStatus = await bfBatchesByStatus(status);
+      const h = byStatus.find((b) => String(b.batchNo) === s);
+      if (h) return h._id;
+    } catch { /* try next status */ }
+  }
+  throw new Error(`no Brewfather batch with number ${s}`);
 }
 
 async function bfPatchBatch(batchIdOrNo, patch) {
