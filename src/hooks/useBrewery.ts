@@ -534,9 +534,15 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
     // Brewfather batch. No inference/guessing — with >1 fermenting batch guessing is
     // useless, and even with one it's better to be explicit. Unassigned → no batch
     // (card shows "⚠ Batch unassigned — Manage to pick"). Assign via ⚙ Manage.
-    const bf = bfBatches.find(
-      (b) => b.name === batchSel || String(b.batchNo) === batchSel,
-    ) ?? null;
+    // batch is the Brewfather batch NUMBER as free text (input_text). Treat empty /
+    // None / 'unknown' (HA's default initial input_text value) / unavailable as
+    // unassigned. Resolve by number first, then name (back-compat).
+    const cleanBatchSel =
+      batchSel && !['', 'none', 'None', 'unknown', 'unavailable'].includes(batchSel)
+        ? batchSel : null;
+    const bf = cleanBatchSel
+      ? (bfBatches.find((b) => String(b.batchNo) === cleanBatchSel || b.name === cleanBatchSel) ?? null)
+      : null;
     const joinSource: 'assigned' | 'inferred' | 'none' = bf ? 'assigned' : 'none';
 
     // Tilt comes only from the explicit tilt assignment.

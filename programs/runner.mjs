@@ -213,10 +213,16 @@ async function deriveTank(tankId, by) {
 
   const tiltSel = s(`input_select.${tankId}_tilt`);
   const { gravity, tempF, ageMin } = tiltData(by, tiltSel);
-  const batchSel = s(`input_select.${tankId}_batch`);
-  // OG for this tank's batch: match the assigned batch in all_batches_data
+  // batch is now the Brewfather batch NUMBER stored as free text (input_text).
+  // Treat empty / 'None' / 'unknown' (HA's default initial input_text value) as
+  // unassigned. Match by number first, then name (back-compat with any old value).
+  const rawBatch = s(`input_text.${tankId}_batch`);
+  const batchSel = (rawBatch && !['', 'none', 'None', 'unknown', 'unavailable'].includes(rawBatch))
+    ? rawBatch : null;
   const bfData = by['sensor.brewfather_all_batches_data']?.attributes?.data || [];
-  const batch = bfData.find((b) => b.name === batchSel || String(b.batchNo) === batchSel) || null;
+  const batch = batchSel
+    ? bfData.find((b) => String(b.batchNo) === batchSel || b.name === batchSel) || null
+    : null;
   const og = batch?.measuredOg != null ? Number(batch.measuredOg) : null;
   const fermentingStartMs = batch?.fermentingStart ? Date.parse(batch.fermentingStart) : null;
 
