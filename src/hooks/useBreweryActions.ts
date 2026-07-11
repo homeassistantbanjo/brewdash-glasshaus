@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useToast } from '../components/Toasts';
-import { HA_URL, HA_TOKEN } from '../config';
+import { HA_WRITE_BASE, HA_TOKEN } from '../config';
 
 export function useBreweryActions() {
   const toast = useToast();
@@ -14,7 +14,7 @@ export function useBreweryActions() {
   const call = useCallback(
     async (domain: string, service: string, entity_id: string, data: Record<string, any>, what: string) => {
       try {
-        const r = await fetch(`${HA_URL}/api/services/${domain}/${service}`, {
+        const r = await fetch(`${HA_WRITE_BASE}/api/services/${domain}/${service}`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${HA_TOKEN}`, 'content-type': 'application/json' },
           body: JSON.stringify({ entity_id, ...data }),
@@ -34,7 +34,7 @@ export function useBreweryActions() {
   const callQuiet = useCallback(
     async (domain: string, service: string, entity_id: string, data: Record<string, any>) => {
       try {
-        const r = await fetch(`${HA_URL}/api/services/${domain}/${service}`, {
+        const r = await fetch(`${HA_WRITE_BASE}/api/services/${domain}/${service}`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${HA_TOKEN}`, 'content-type': 'application/json' },
           body: JSON.stringify({ entity_id, ...data }),

@@ -33,6 +33,13 @@ export const HA_URL =
 export const HA_TOKEN =
   runtime.haToken || import.meta.env.VITE_HA_TOKEN || '';
 
+// Base URL for HA WRITES (service calls). In production the nginx serving the app
+// proxies /ha/ → HA (same-origin, so no CORS — a direct cross-origin fetch to
+// HA:8123 fails in the browser). In dev there's no proxy, so fall back to the
+// absolute HA_URL (dev talks to HA directly; CORS is dev's problem to allow).
+export const HA_WRITE_BASE =
+  import.meta.env.PROD ? '/ha' : HA_URL;
+
 // The analyzer container's HTTP API (full-plant Insights view). Same host as the
 // dashboard is served from, port 8091, unless overridden at runtime/build time.
 export const ANALYZER_URL =
