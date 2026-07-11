@@ -27,3 +27,8 @@ dist
 ha_*.json
 st.json
 lb.json
+
+# TS incremental build cache + stray API-response dumps from debugging
+tsconfig.tsbuildinfo
+.m*.json
+.newrecipe.json
