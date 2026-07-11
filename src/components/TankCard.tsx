@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useEntity, type EntityName } from '@hakit/core';
+import { useHaEntity } from '../data/haStates';
 import { Metric } from './Metric';
 import { Sparkline } from './Sparkline';
 import { ConicalFermenter, VesselState } from './ConicalFermenter';
@@ -38,14 +38,12 @@ function CollarPip({ pos, label, value, unit, color, glow }: {
  *  container's sensor.tank_N_program_status). Returns the human phase label when a
  *  program is running, else null. Used to drive the header status. */
 function useProgramPhase(tankId: string): string | null {
-  try {
-    const e = useEntity(`sensor.${tankId}_program_status` as EntityName, { returnNullIfNotFound: true });
-    const a = (e?.attributes as any) ?? null;
-    if (!a || !a.phase || a.phase === 'done') return null;
-    // ignore stale/idle statuses; only surface an actively-running phase
-    if (typeof a.phase === 'string' && a.phase.trim() && a.phase.toLowerCase() !== 'none') return a.phase;
-    return null;
-  } catch { return null; }
+  const e = useHaEntity(`sensor.${tankId}_program_status`);
+  const a = (e?.attributes as any) ?? null;
+  if (!a || !a.phase || a.phase === 'done') return null;
+  // ignore stale/idle statuses; only surface an actively-running phase
+  if (typeof a.phase === 'string' && a.phase.trim() && a.phase.toLowerCase() !== 'none') return a.phase;
+  return null;
 }
 
 /** Ring legend chip — a colored dot + name + value, so you know which concentric

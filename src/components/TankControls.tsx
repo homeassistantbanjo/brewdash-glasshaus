@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useEntity, type EntityName } from '@hakit/core';
+import { useHaEntity } from '../data/haStates';
 import { theme, hexA, stateColor } from '../theme/tokens';
 import { useBreweryActions } from '../hooks/useBreweryActions';
 import { useAssignableBatches } from '../hooks/useBrewery';
@@ -13,19 +13,20 @@ const STATUS_FALLBACK = ['Ready', 'Fermenting', 'Cold Crashing', 'Dirty'];
 
 /** Pull an input_select's current options from HA (batch list is auto-synced). */
 function useOptions(entityId: string): string[] {
-  try {
-    const e = useEntity(entityId as EntityName, { returnNullIfNotFound: true });
-    const opts = (e?.attributes as any)?.options;
-    return Array.isArray(opts) ? opts : [];
-  } catch { return []; }
+  const e = useHaEntity(entityId);
+  const opts = (e?.attributes as any)?.options;
+  return Array.isArray(opts) ? opts : [];
 }
 
 /** Read an entity's attributes object (or null). For the program-status sensor. */
 function useEntityAttrs(entityId: string): Record<string, any> | null {
-  try {
-    const e = useEntity(entityId as EntityName, { returnNullIfNotFound: true });
-    return (e?.attributes as any) ?? null;
-  } catch { return null; }
+  const e = useHaEntity(entityId);
+  return (e?.attributes as any) ?? null;
+}
+
+/** Read an entity's current state string (or undefined). */
+function useStateOf(entityId: string): string | undefined {
+  return useHaEntity(entityId)?.state;
 }
 
 export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => void }) {
@@ -37,20 +38,17 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
   const statusOptions = liveStatusOptions.length ? liveStatusOptions : STATUS_FALLBACK;
   const tiltOptions = useOptions(`input_select.${tank.id}_tilt`);
 
-  // read current selections to show active state
-  const cur = (id: string) => {
-    try { return useEntity(id as EntityName, { returnNullIfNotFound: true })?.state; }
-    catch { return undefined; }
-  };
-  const curStatus = cur(`input_select.${tank.id}_status`);
-  const curTilt = cur(`input_select.${tank.id}_tilt`);
-  const curBatch = cur(`input_text.${tank.id}_batch`); // stored batchNo (free text)
+  // read current selections to show active state (fixed-count, fixed-order hook
+  // calls — safe under the rules of hooks)
+  const curStatus = useStateOf(`input_select.${tank.id}_status`);
+  const curTilt = useStateOf(`input_select.${tank.id}_tilt`);
+  const curBatch = useStateOf(`input_text.${tank.id}_batch`); // stored batchNo (free text)
 
   // fermentation program: options + current selection + live status (from the
   // programs container's sensor.tank_N_program_status). Absent until the programs
   // HA package is installed — the section shows a hint in that case.
   const programOptions = useOptions(`input_select.${tank.id}_program`);
-  const curProgram = cur(`input_select.${tank.id}_program`);
+  const curProgram = useStateOf(`input_select.${tank.id}_program`);
   const programStatus = useEntityAttrs(`sensor.${tank.id}_program_status`);
   const [planEditor, setPlanEditor] = useState(false);
   const running = !!curProgram && curProgram !== 'None';
@@ -257,11 +255,8 @@ function Pills({ options, active, onPick, wrap }: {
 }
 
 function FgStepper({ current, onSet }: { current: string; onSet: (fg: number) => void }) {
-  let init = 1.010;
-  try {
-    const e = useEntity(`input_number.${current}_expected_fg`, { returnNullIfNotFound: true });
-    if (e?.state) init = Number(e.state);
-  } catch { /* default */ }
+  const e = useHaEntity(`input_number.${current}_expected_fg`);
+  const init = e?.state ? Number(e.state) : 1.010;
   const [fg, setFg] = useState(init.toFixed(3));
 
   const commit = () => {

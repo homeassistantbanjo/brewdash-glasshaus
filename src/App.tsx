@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { HassConnect } from '@hakit/core';
 import { Overview } from './components/Overview';
+import { HaStatesProvider } from './data/haStates';
 import { ToastProvider } from './components/Toasts';
 import { theme, hexA, useThemeName, applyBodyBg, fx } from './theme/tokens';
 import { HA_URL, HA_TOKEN } from './config';
@@ -40,9 +41,11 @@ export default function App() {
 
       <div style={{ position: 'relative', zIndex: 1 }}>
         <HassConnect hassUrl={HA_URL} hassToken={HA_TOKEN}>
-          <ToastProvider>
-            <Overview />
-          </ToastProvider>
+          <HaStatesProvider>
+            <ToastProvider>
+              <Overview />
+            </ToastProvider>
+          </HaStatesProvider>
         </HassConnect>
       </div>
     </div>

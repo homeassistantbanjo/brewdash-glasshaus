@@ -61,11 +61,26 @@ const BELLE_PLAN = {
 
 const cmd = process.argv[2];
 
+// Tank 3 is assigned the BLUE Tilt — a selector option with NO live device, so
+// sensor.tilt_blue_gravity is ours to script (nothing overwrites it). Black/Red are
+// live (real batch + water Tilt) and untouched. Requires the per-tank-control fix
+// (deriveTank resolves tank_3's gravity from its Blue Tilt, not global Black).
+const TILT = 'blue';
+
 if (cmd === 'setup') {
+  // assign the unused BLUE tilt so deriveTank reads OUR script-able sensor
+  await setHelper('input_select', 'select_option', { entity_id: `input_select.${T}_tilt`, option: 'Blue' });
   // seed a throwaway batch + the plan, reset program to phase 0
   await setHelper('input_text', 'set_value', { entity_id: `input_text.${T}_batch`, value: 'TEST' });
   await setHelper('input_number', 'set_value', { entity_id: `input_number.${T}_expected_fg`, value: 1.006 });
-  await setState('sensor.batch_og', 1.058);                        // fake OG
+  // deriveTank gets OG from the BF batch data sensor (matched by name). Inject a
+  // fake 'TEST' batch with measuredOg so attenuation computes. We PRESERVE any real
+  // batches already in the sensor (prepend), so we don't clobber live batch data.
+  const cur = await get('sensor.brewfather_all_batches_data');
+  const existing = (cur?.attributes?.data || []).filter((b) => b.name !== 'TEST' && String(b.batchNo) !== 'TEST');
+  const testBatch = { batchNo: 'TEST', name: 'TEST', measuredOg: 1.058, status: 'Fermenting', fermentingStart: new Date(Date.now() - 20 * 3600e3).toISOString() };
+  await setState('sensor.brewfather_all_batches_data', 'test',
+    { ...(cur?.attributes || {}), data: [testBatch, ...existing] });
   await setState(`sensor.${T}_program_plan`, 'ready', { plan: BELLE_PLAN });
   // program select → the plan key the runner resolves ('Generated' per resolveProgram)
   await setHelper('input_select', 'select_option', { entity_id: `input_select.${T}_program`, option: 'Generated' }).catch(async () => {
@@ -91,13 +106,14 @@ if (cmd === 'step') {
   const n = Number(process.argv[3]);
   const c = CURVE[n];
   if (!c) { console.log('steps: 0..5'); process.exit(1); }
-  await setState('sensor.tilt_black_gravity', c.gravity);
-  await setState('sensor.apparent_attenuation', c.atten);
-  await setState('sensor.gravity_24h_delta', c.delta);
-  // progress-to-fg = how far from OG to FG (for progressToFg conditions if any)
+  // drive the BLUE tilt's gravity + its per-color 24h stat (deriveTank prefers the
+  // per-color stat for delta). deriveTank computes attenuation itself from og+gravity,
+  // so we DON'T set apparent_attenuation — we set the real inputs and let it derive.
+  await setState(`sensor.tilt_${TILT}_gravity`, c.gravity);
+  await setState(`sensor.tilt_${TILT}_temperature`, 70);   // arbitrary beer temp reading
+  await setState(`sensor.tilt_${TILT}_gravity_24h_stat`, c.delta / 1000);  // SG/day (runner ×1000 → pts/day)
   const prog = Math.round(((1.058 - c.gravity) / (1.058 - 1.006)) * 100);
-  await setState('sensor.attenuation_progress', prog);
-  console.log(`STEP ${n}: ${c.label} — gravity=${c.gravity} atten=${c.atten}% delta=${c.delta} progress=${prog}%`);
+  console.log(`STEP ${n}: ${c.label} — blue gravity=${c.gravity} delta=${c.delta}pts/day (deriveTank computes atten from og 1.058)`);
   console.log('  (tick the runner or wait ≤5min, then: node tank3-test-rig.mjs read)');
 }
 
@@ -118,8 +134,15 @@ if (cmd === 'read') {
 if (cmd === 'teardown') {
   await setHelper('input_text', 'set_value', { entity_id: `input_text.${T}_batch`, value: 'unknown' });
   await setHelper('input_select', 'select_option', { entity_id: `input_select.${T}_program`, option: 'None' }).catch(() => {});
+  await setHelper('input_select', 'select_option', { entity_id: `input_select.${T}_tilt`, option: 'None' }).catch(() => {});
   await setHelper('input_number', 'set_value', { entity_id: `input_number.${T}_program_phase`, value: 0 });
-  console.log('TEARDOWN: tank_3 batch cleared, program None, phase 0. (scripted global sensors will refresh from real data.)');
+  // remove the injected TEST batch from the BF data sensor (leave real batches)
+  const cur = await get('sensor.brewfather_all_batches_data');
+  if (cur?.attributes?.data) {
+    const cleaned = cur.attributes.data.filter((b) => b.name !== 'TEST' && String(b.batchNo) !== 'TEST');
+    await setState('sensor.brewfather_all_batches_data', cur.state, { ...cur.attributes, data: cleaned });
+  }
+  console.log('TEARDOWN: tank_3 batch cleared, tilt None, program None, phase 0, TEST batch removed from BF sensor.');
 }
 
 if (!['setup', 'step', 'read', 'teardown'].includes(cmd)) {

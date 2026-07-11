@@ -4,8 +4,8 @@
  * touches an entity string.
  */
 
-import { useEntity, useHass, type EntityName } from '@hakit/core';
 import { useEffect, useMemo, useState } from 'react';
+import { useHaEntity } from '../data/haStates';
 import {
   Tank, TankStatus, TiltDevice, GlycolLoop, BrewfatherBatch, BatchReading,
   ActiveBatch, TiltColor, CADENCE, Reading, EquipmentPower, PowerState, EnergyUsage,
@@ -20,17 +20,14 @@ import {
 import { useBreweryActions } from './useBreweryActions';
 import { BREWFATHER_URL } from '../config';
 
-// Small helper: pull a hakit entity safely (it throws if the id is unknown,
-// so we guard with a try and treat missing as "not present yet").
+// Pull an entity's current state. Backed by the HA REST state poll
+// (src/data/haStates.tsx), NOT hakit's `useEntity` — hakit's client subscription
+// intermittently dropped entities that plainly exist in HA (Tank 2 "no controller"
+// with probe + setpoint both live server-side). Returns null when absent.
+// `useHaEntity` is a real hook (useContext + useMemo), so calling it here keeps
+// hook order stable exactly as the previous useEntity call did.
 function safeEntity(id: string) {
-  try {
-    // This app builds entity IDs at runtime from the registry, so we opt out of
-    // hakit's literal-EntityName checking here (cast is intentional, one place).
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    return useEntity(id as EntityName, { returnNullIfNotFound: true });
-  } catch {
-    return null;
-  }
+  return useHaEntity(id);
 }
 
 const c2f = (c: number) => c * 9 / 5 + 32;
