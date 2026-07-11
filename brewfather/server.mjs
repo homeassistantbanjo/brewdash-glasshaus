@@ -35,6 +35,9 @@ const CORS = {
   'Access-Control-Allow-Origin': ALLOW_ORIGIN,
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
   'Access-Control-Allow-Headers': 'content-type',
+  // best-practice headers (clears the DevTools Issues-panel security/perf nags)
+  'X-Content-Type-Options': 'nosniff',
+  'Cache-Control': 'no-store',
 };
 const sendJson = (res, code, obj) =>
   res.writeHead(code, { 'content-type': 'application/json', ...CORS }).end(JSON.stringify(obj));

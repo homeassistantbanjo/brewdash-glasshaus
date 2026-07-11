@@ -1,47 +1,51 @@
-import { useHass } from '@hakit/core';
 import { useCallback } from 'react';
 import { useToast } from '../components/Toasts';
+import { HA_URL, HA_TOKEN } from '../config';
 
 export function useBreweryActions() {
-  // hakit v6: useHass() is a zustand store whose callService lives under
-  // `.helpers`, NOT at the top level. Destructuring `callService` off the root
-  // yields undefined, so every write silently threw (and was swallowed below).
-  const { helpers } = useHass();
   const toast = useToast();
 
-  // `what` is a human label for the toast (e.g. "Tank 2 status → Ready").
-  // We AWAIT the call so a rejected service (bad option, offline, auth) surfaces
-  // as a visible error toast instead of vanishing into the console.
+  // Writes go through HA's REST API directly (POST /api/services/<domain>/<service>),
+  // NOT hakit's callService. hakit's service-call shape kept shifting across versions
+  // and was producing ZERO outbound HA traffic on assign (verified in the Network tab
+  // — selecting a tilt/batch fired no request). The REST path is verified-working and
+  // uses the same HA_URL/HA_TOKEN the app already connects with. `what` is the toast
+  // label. Surfaces a visible error toast on any non-2xx / network failure.
   const call = useCallback(
     async (domain: string, service: string, entity_id: string, data: Record<string, any>, what: string) => {
-      console.log('WRITE', { domain, service, entity_id, data });
       try {
-        const cs: any = (helpers as any)?.callService;
-        if (typeof cs !== 'function') throw new Error('callService unavailable (HA not connected?)');
-        await cs({ domain, service, target: { entity_id }, serviceData: data });
+        const r = await fetch(`${HA_URL}/api/services/${domain}/${service}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${HA_TOKEN}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ entity_id, ...data }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) throw new Error(`HA ${r.status}: ${(await r.text().catch(() => '')).slice(0, 120)}`);
         toast.ok(what);
       } catch (e) {
-        console.error('callService failed', domain, service, entity_id, e);
-        const reason = e instanceof Error ? e.message : String(e);
-        toast.error(`${what} failed — ${reason}`);
+        console.error('HA write failed', domain, service, entity_id, e);
+        toast.error(`${what} failed — ${e instanceof Error ? e.message : String(e)}`);
       }
     },
-    [helpers, toast],
+    [toast],
   );
 
-  // Silent variant: no success toast (used for background reconciles the user
-  // didn't explicitly trigger, e.g. syncing batch options). Errors still log.
+  // Silent variant: no success toast (background writes, e.g. the ferm plan JSON).
   const callQuiet = useCallback(
     async (domain: string, service: string, entity_id: string, data: Record<string, any>) => {
       try {
-        const cs: any = (helpers as any)?.callService;
-        if (typeof cs !== 'function') return;
-        await cs({ domain, service, target: { entity_id }, serviceData: data });
+        const r = await fetch(`${HA_URL}/api/services/${domain}/${service}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${HA_TOKEN}`, 'content-type': 'application/json' },
+          body: JSON.stringify({ entity_id, ...data }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) console.error('HA write (quiet) failed', domain, service, entity_id, r.status);
       } catch (e) {
-        console.error('callService (quiet) failed', domain, service, entity_id, e);
+        console.error('HA write (quiet) failed', domain, service, entity_id, e);
       }
     },
-    [helpers],
+    [],
   );
 
   return {
