@@ -340,11 +340,18 @@ You are given the YEAST (name, lab, type, expected attenuation %, min/max temp �
 and OG/expected FG. Design an ordered set of temperature STEPS that fits THIS yeast and style.
 
 RULES:
-- FLAVOR INTENT DRIVES THE TEMPS. The user's target profile (given in the message) is a PRIMARY
-  input: cooler suppresses esters/phenols (cleaner), warmer + warmer PITCH expresses them (fruity/
-  estery/phenolic). A hefe pitched cool→clove-ish, warm→banana. If they want "clean" run cool and
-  rise only to finish; if "fruity/estery" pitch warmer and free-rise sooner; match the goal.
-- Output temps in °F. Respect the yeast's min/max temp range (converted from °C).
+- FLAVOR INTENT IS THE PRIMARY DRIVER OF TEMPERATURE — it OUTRANKS the recorded spec range.
+  The user's target profile is the goal; design temps that ACHIEVE it. Cooler suppresses esters/
+  phenols (cleaner); warmer + warmer PITCH expresses them (fruity/estery/phenolic). A hefe pitched
+  cool→clove-ish, warm→banana. If they want "clean" run cool and rise only to finish; if "fruity/
+  estery/PEPPERY/phenolic" pitch cool then FREE-RISE HOT to hit the target — do not hold back.
+  Example: a "peppery saison" REQUIRES rising into the mid-to-high 80s°F for POF+ phenolic
+  expression; recommending only ~77°F would fail the intent. Chase the flavor, not the spreadsheet.
+- Output temps in °F. The strain profile's tempRangeF (Claude's real strain knowledge) is the
+  authoritative usable range — PREFER IT over Brewfather's often-conservative minTempC/maxTempC.
+  When the flavor goal calls for it (e.g. peppery/estery saison, kveik), you MAY exceed Brewfather's
+  recorded max up to the strain profile's true max, because that recorded number is frequently a
+  cautious default, not the strain's real ceiling.
 - Advances key off REAL fermentation data, NOT days. Use advance type
   "attenuationOfExpected" with pct = % OF THIS STRAIN'S expected attenuation (e.g. pct:80 means
   80% of the strain's expected attenuation reached). Early primary steps advance mid-way; the
@@ -366,8 +373,10 @@ RULES:
   If profile.hotFinish is true, drive the warm free-rise finish described above.
 - End with a conditioning hold, then a cold-crash step. The cold-crash step MUST have
   requiresConfirm:true (the brewer tastes & confirms before crashing — never auto).
-- clamp.maxF must not exceed the yeast's max temp; for any lager, clamp.maxF <= 70. For a saison,
-  clamp.maxF should permit the hot finish (up to the strain's max, typically ~90°F).
+- clamp.maxF must ACCOMMODATE the hottest step your plan actually uses (never clamp below a step's
+  temp, or the runner will cap it). Set clamp.maxF to the strain profile's true max. For a lager
+  keep clamp.maxF <= 70; for a peppery/estery saison this means the mid-to-high 80s°F (up to ~90°F),
+  NOT 77°F. Set clamp.minF at/just below the cold-crash target.
 - Every step needs a short "why" (the reasoning shown to the brewer). If the strain is diastatic,
   say so explicitly in at least one "why".
 
@@ -442,7 +451,9 @@ Output ONLY JSON, no prose/fences:
  "glycerol":"low|medium|high",// glycerol/mouthfeel contribution
  "flocculation":"low|medium|high",
  "attenuationCeilingPct":N,   // realistic max apparent attenuation for THIS strain
- "tempRangeF":{"min":N,"max":N}, // usable fermentation range, °F
+ "tempRangeF":{"min":N,"max":N}, // the strain's REAL documented usable range, °F — from strain
+                               // knowledge, NOT the (often cautious) bfTempC hint. For a saison
+                               // the true max is mid-to-high 80s (85-90°F); do not clip to 77.
  "hotFinish":bool,            // benefits from a warm free-rise finish (saison/kveik)
  "notes":"<=160 chars of fermentation-relevant quirks (dry-hop creep risk, etc.)"}`;
 
