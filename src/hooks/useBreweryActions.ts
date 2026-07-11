@@ -79,11 +79,13 @@ export function useBreweryActions() {
       await callQuiet('input_number', 'set_value', `input_number.${t}_program_phase`, { value: 0 });
       await callQuiet('input_datetime', 'set_datetime', `input_datetime.${t}_program_phase_started`, { datetime: new Date().toISOString() });
     },
-    // Write a Claude-generated (+ edited) plan JSON to input_text.tank_N_program_plan
-    // and set the program to 'Generated' so the runner picks it up. Phase reset so it
-    // starts from the top. The plan is per-batch, reboot-proof (input_text).
-    setGeneratedPlan: async (t: string, planJson: string) => {
-      await callQuiet('input_text', 'set_value', `input_text.${t}_program_plan`, { value: planJson });
+    // Activate a Claude-generated plan. The plan OBJECT is already written to
+    // sensor.tank_N_program_plan's ATTRIBUTES by FermPlanEditor (via the states API —
+    // the plan is too big for input_text's 255-char cap, and that's where the runner
+    // reads it). Here we just flip the program to 'Generated' + reset phase so the
+    // runner starts it from the top. (`_planLabel` is unused — the sensor already has
+    // the plan; kept in the signature for the caller's clarity.)
+    setGeneratedPlan: async (t: string, _planLabel: string) => {
       await call('input_select', 'select_option', `input_select.${t}_program`, { option: 'Generated' }, `${label(t)} → generated ferm plan`);
       await callQuiet('input_number', 'set_value', `input_number.${t}_program_phase`, { value: 0 });
       await callQuiet('input_datetime', 'set_datetime', `input_datetime.${t}_program_phase_started`, { datetime: new Date().toISOString() });
