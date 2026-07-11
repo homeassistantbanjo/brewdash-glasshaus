@@ -28,6 +28,14 @@ function rateLimit(target, currentSetpointF) {
 // so time-in-phase requirements don't apply (the beer's been going, this phase hasn't).
 function conditionMet(cond, s, adopting = false) {
   if (!cond) return false;
+  // COMPOUND conditions: { all: [...] } → every sub-condition true (AND);
+  // { any: [...] } → at least one true (OR / timeout-safety). Recurses, so sub-
+  // conditions can themselves be compound. Enables strain-specific hold logic like
+  // "advance when elapsed ≥ 18h AND attenuation ≥ 20%" (time floor + gravity), or
+  // "elapsed ≥ 36h OR 75% attenuation" (whichever first). Single-condition advances
+  // (a plain {type,...}) fall through unchanged — full backward compatibility.
+  if (Array.isArray(cond.all)) return cond.all.every((c) => conditionMet(c, s, adopting));
+  if (Array.isArray(cond.any)) return cond.any.some((c) => conditionMet(c, s, adopting));
   switch (cond.type) {
     case 'attenuation':
       return s.apparentAttenuationPct != null && s.apparentAttenuationPct >= cond.pct;

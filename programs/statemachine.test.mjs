@@ -28,6 +28,42 @@ ok('attnOfExpected: null expected → treat pct as absolute (55<80 no)',
    cm({type:'attenuationOfExpected',pct:80},{apparentAttenuationPct:55,expectedAttenuationPct:null})===false);
 ok('attnOfExpected: null AA → false', cm({type:'attenuationOfExpected',pct:80},{apparentAttenuationPct:null,expectedAttenuationPct:81})===false);
 
+// --- COMPOUND advance conditions (all/any) — strain-specific hold logic ---
+// AND: both sub-conditions must be true
+const ANDcond = {all:[{type:'elapsed',hours:18},{type:'attenuation',pct:20}]};
+ok('AND: time met but atten not → false',
+   cm(ANDcond,{phaseElapsedHours:20,apparentAttenuationPct:10})===false);
+ok('AND: atten met but time not → false',
+   cm(ANDcond,{phaseElapsedHours:10,apparentAttenuationPct:30})===false);
+ok('AND: both met → true',
+   cm(ANDcond,{phaseElapsedHours:20,apparentAttenuationPct:30})===true);
+// OR: either triggers (timeout-safety pattern)
+const ORcond = {any:[{type:'elapsed',hours:36},{type:'attenuation',pct:75}]};
+ok('OR: neither met → false',
+   cm(ORcond,{phaseElapsedHours:10,apparentAttenuationPct:40})===false);
+ok('OR: only time met → true (timeout fired)',
+   cm(ORcond,{phaseElapsedHours:40,apparentAttenuationPct:40})===true);
+ok('OR: only atten met → true (advanced early)',
+   cm(ORcond,{phaseElapsedHours:10,apparentAttenuationPct:80})===true);
+// Belle Saison step 1 EXACT: hold @68 until fermentation active AND ≥18h floor.
+// "time floor + gravity is the real trigger" — active detects the ferment start.
+const belle1 = {all:[{type:'elapsed',hours:18},{type:'active'}]};
+ok('BelleSaison hold: 20h but not active yet → hold',
+   cm(belle1,{phaseElapsedHours:20,gravity24hDeltaPts:0,og:1.060,gravity:1.059})===false);
+ok('BelleSaison hold: active but only 6h (floor not met) → hold',
+   cm(belle1,{phaseElapsedHours:6,gravity24hDeltaPts:-8,og:1.060,gravity:1.050})===false);
+ok('BelleSaison hold: 20h AND active → advance to free-rise',
+   cm(belle1,{phaseElapsedHours:20,gravity24hDeltaPts:-8,og:1.060,gravity:1.050})===true);
+// nesting: any[ elapsed, all[atten, progress] ]
+const nested = {any:[{type:'elapsed',hours:48},{all:[{type:'attenuation',pct:70},{type:'progressToFg',pct:90}]}]};
+ok('nested any/all: inner AND satisfied → true',
+   cm(nested,{phaseElapsedHours:5,apparentAttenuationPct:72,progressToFgPct:95})===true);
+ok('nested any/all: inner AND partial, time not up → false',
+   cm(nested,{phaseElapsedHours:5,apparentAttenuationPct:72,progressToFgPct:50})===false);
+// backward-compat: a plain single condition still works untouched
+ok('single condition unaffected by compound branch',
+   cm({type:'attenuation',pct:50},{apparentAttenuationPct:60})===true);
+
 ok('lager hold 64 while <50% atten', r.setpointF===64 && r.advanceTo===null);
 r=tick(lm,{phaseIndex:0,phaseElapsedHours:20,currentSetpointF:64,apparentAttenuationPct:52,gravity:1.028,expectedFg:1.010,gravity24hDeltaPts:-8});
 ok('lager advances at 50% atten', r.advanceTo===1);
