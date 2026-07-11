@@ -101,6 +101,30 @@ export function calcAttenuation(
   return round(((og - sg) / (og - 1)) * 100, 1);
 }
 
+/**
+ * Is the live gravity physically implausible for this batch — i.e. the Tilt is
+ * almost certainly NOT reading the beer? Two impossible cases:
+ *   - SG below ~0.995 → floating in water/CO₂ head or fully out of liquid.
+ *   - Apparent attenuation above ~100.5% → SG dropped below 1.000, which real
+ *     wort can't do; the hydrometer has fallen sideways or is stuck in foam.
+ * A small tolerance (0.5%) absorbs sensor noise/rounding so a genuine ~100%
+ * attenuation lager doesn't false-positive. Returns a reason string when
+ * suspect, else null. We flag rather than fake a clamped number — a clamped
+ * 100% would hide a broken Tilt and let control/plans act on garbage.
+ */
+export function gravitySuspectReason(
+  og: number | null,
+  sg: number | null,
+): string | null {
+  if (sg == null) return null;              // no reading is "missing", not "suspect"
+  if (sg < 0.995) return `SG ${sg.toFixed(3)} below water — Tilt likely out of liquid`;
+  const att = calcAttenuation(og, sg);
+  if (att != null && att > 100.5) {
+    return `attenuation ${att}% impossible (SG < 1.000) — Tilt likely fallen or in foam`;
+  }
+  return null;
+}
+
 /** Progress toward the *expected* terminal gravity, 0–100 clamped. */
 export function calcAttenuationProgress(
   og: number | null,

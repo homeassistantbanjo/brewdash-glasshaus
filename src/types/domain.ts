@@ -225,6 +225,8 @@ export interface TankAlert {
   label: string;
   /** which HA binary_sensor raised it (diagnostics/drill-in) */
   entityId: string;
+  /** optional longer explanation for the drill-in / tooltip */
+  detail?: string;
 }
 
 // ---------------------------------------------------------------------------

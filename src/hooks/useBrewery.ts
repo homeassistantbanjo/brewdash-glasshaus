@@ -11,7 +11,7 @@ import {
   ActiveBatch, TiltColor, CADENCE, Reading, EquipmentPower, PowerState, EnergyUsage,
   TankAlert, isActiveBrew,
 } from '../types/domain';
-import { toReading, composeBatch, normalizeReading } from '../data/derive';
+import { toReading, composeBatch, normalizeReading, gravitySuspectReason } from '../data/derive';
 import {
   TANKS, PLANT, PLANT_DIAG, KEGERATOR, POWER_THRESHOLDS, tankControllerEnergy,
   tiltEntities, tiltStatEntities, derivedEntity, tiltSignalLostEntity,
@@ -760,6 +760,17 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
         alerts.push({
           key: 'assignment_suspect', severity: 'problem', label: 'ASSIGNMENT SUSPECT',
           entityId: 'app:verifyAssignment',
+        });
+      }
+      // Implausible gravity → the Tilt is almost certainly not in the beer
+      // (fallen sideways, in foam/CO₂, or lifted out). Flag it instead of
+      // trusting a >100% attenuation or sub-water SG. Down-stream readers should
+      // treat gravity/attenuation as unreliable while this is present.
+      const suspectReason = gravitySuspectReason(composed.og, composed.gravity.value);
+      if (suspectReason && !alerts.some((x) => x.key === 'gravity_suspect')) {
+        alerts.push({
+          key: 'gravity_suspect', severity: 'problem', label: 'GRAVITY READING SUSPECT',
+          entityId: 'app:gravitySuspect', detail: suspectReason,
         });
       }
       // most-severe first: problem > warning > milestone

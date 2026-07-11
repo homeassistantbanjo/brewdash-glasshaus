@@ -116,5 +116,27 @@ ok('pace computed (ahead → positive)', r.paceVsSchedule !== null && r.paceVsSc
 ok('pace null without daysFermenting', computeDerived({ gravity:1.02, og:1.05, expectedFg:1.01,
   gravity24hDeltaPts:-8, gravity8hMaxSg:1.025 }, NOW).paceVsSchedule === null);
 
+// GRAVITY SUSPECT (Tilt fallen / in water / lifted out) — flag, don't fake.
+// SG below water → suspect
+r = computeDerived({ gravity:0.990, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:0, gravity8hMaxSg:1.050, gravityAgeMin:0 }, NOW);
+ok('SG 0.990 (below water) → gravitySuspect', r.gravitySuspect===true);
+// attenuation > 100.5% (SG dropped below 1.000) → suspect
+r = computeDerived({ gravity:0.998, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:0, gravity8hMaxSg:1.050, gravityAgeMin:0 }, NOW);
+ok('att >100.5% (SG<1.000) → gravitySuspect', r.gravitySuspect===true);
+// genuine ~100% attenuation lager (SG exactly 1.000) → NOT suspect (tolerance)
+r = computeDerived({ gravity:1.000, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:-0.2, gravity8hMaxSg:1.001, gravityAgeMin:1 }, NOW);
+ok('SG 1.000 (~100% att) → NOT suspect', r.gravitySuspect===false);
+// normal mid-ferment → not suspect
+r = computeDerived({ gravity:1.020, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:-8, gravity8hMaxSg:1.025, gravityAgeMin:0 }, NOW);
+ok('normal ferment → not suspect', r.gravitySuspect===false);
+// no gravity (no Tilt) → not "suspect" (it's just missing)
+r = computeDerived({ gravity:null, og:1.050, expectedFg:1.010, gravity24hDeltaPts:null,
+  gravity8hMaxSg:null, gravityAgeMin:null }, NOW);
+ok('null gravity → not suspect (missing, not wrong)', r.gravitySuspect===false);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

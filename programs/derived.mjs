@@ -60,6 +60,13 @@ export function computeDerived(t, now = 0) {
   const velSg = delta != null ? delta / 1000 : null; // pts/day → SG/day
 
   const attenuationPct = calcAttenuation(og, gravity);
+  // Physically implausible gravity → the Tilt isn't in the beer (fallen sideways,
+  // in foam/CO₂, or lifted out): SG below water, or apparent attenuation over
+  // ~100.5% (SG < 1.000, impossible for real wort). The 0.5% tolerance absorbs
+  // noise so a genuine ~100%-attenuation lager doesn't false-positive. Callers
+  // should treat gravity/attenuation as untrustworthy while this is true.
+  const gravitySuspect = gravity != null
+    && (gravity < 0.995 || (attenuationPct != null && attenuationPct > 100.5));
   const progressToFgPct = calcProgress(og, gravity, fg);
   const daysToTerminal = calcDaysToTerminal(gravity, fg, velSg);
   const projectedFgReach = projectedFgDate(gravity, fg, velSg, now);
@@ -148,7 +155,7 @@ export function computeDerived(t, now = 0) {
   alerts.sort((a, b) => rank[a.severity] - rank[b.severity]);
 
   return {
-    attenuationPct, progressToFgPct, paceVsSchedule, dropFromPeakPts, daysToTerminal,
+    attenuationPct, gravitySuspect, progressToFgPct, paceVsSchedule, dropFromPeakPts, daysToTerminal,
     projectedFgReach, tiltProbeDeltaF, gravityAgeMin, fermentationStarted, activelyFermenting, alerts,
     // gravity stability (readiness signal)
     isStableNow, stableDays, terminalConfirmed, requiredStableDays,

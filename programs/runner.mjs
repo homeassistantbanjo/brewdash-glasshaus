@@ -400,16 +400,26 @@ async function deriveTank(tankId, by) {
     conditionDays: facts?.conditionDays ?? null,
   }, Date.now());
 
+  // A physically implausible gravity (computeDerived's gravitySuspect: SG below
+  // water, or apparent attenuation > ~100.5%) means the Tilt isn't in the beer —
+  // fallen sideways, in foam/CO₂, or lifted out. Treat it as "don't trust it" —
+  // same as stale — so the state machine HOLDS instead of advancing a phase on
+  // garbage. Better a paused program than one driven off a fallen hydrometer.
+  if (d.gravitySuspect) {
+    console.warn(`[${tankId}] gravity ${gravity} implausible (att ${d.attenuationPct}%) — holding, treating as stale`);
+  }
+
   // publish THIS tank's resolved control inputs for tickTank (single source of truth
   // — no re-deriving off global sensors). gravityStale mirrors deriveTank's own
-  // signal-lost gating: no gravity, or a stale reading, means "don't trust it".
+  // signal-lost gating: no gravity, a stale reading, or an implausible value means
+  // "don't trust it".
   controlInputs.set(tankId, {
     gravity, og,
     expectedFg: num(s(`input_number.${tankId}_expected_fg`)),
     attenuationPct: d.attenuationPct ?? null,
     progressToFgPct: d.progressToFgPct ?? null,
     delta,
-    gravityStale: gravity == null || (ageMin != null && ageMin > 20),
+    gravityStale: gravity == null || (ageMin != null && ageMin > 20) || d.gravitySuspect,
   });
 
   // maintain state, and PERSIST any change to the HA helpers (survives reboots).
