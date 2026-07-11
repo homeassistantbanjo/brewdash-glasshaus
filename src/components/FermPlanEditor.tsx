@@ -9,7 +9,7 @@
  */
 import { useEffect, useState } from 'react';
 import { theme, hexA, fx } from '../theme/tokens';
-import { BREWFATHER_URL, HA_URL, HA_TOKEN } from '../config';
+import { BREWFATHER_URL, HA_STATES_BASE, HA_TOKEN } from '../config';
 import { useBreweryActions } from '../hooks/useBreweryActions';
 
 const clip = fx().brackets ? 'polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px)' : undefined;
@@ -78,8 +78,11 @@ export function FermPlanEditor({ tankId, batchNo, onClose }: {
         clamp: plan.clamp, expectedAtten: plan.expectedAtten ?? null,
         phases: plan.phases.map(({ why, ...ph }) => ph), // drop why
       };
-      // 1) write the plan sensor via HA (attributes carry the object)
-      const r = await fetch(`${HA_URL}/api/states/sensor.${tankId}_program_plan`, {
+      // 1) write the plan sensor via HA (attributes carry the object). Goes through
+      // the same-origin /ha proxy (HA_STATES_BASE), NOT the absolute HA_URL — a
+      // direct cross-origin POST to HA:8123 is blocked by CORS and surfaces as
+      // "failed to fetch" (this was the ferm-profile apply failure).
+      const r = await fetch(`${HA_STATES_BASE}/api/states/sensor.${tankId}_program_plan`, {
         method: 'POST', headers: { Authorization: `Bearer ${HA_TOKEN}`, 'content-type': 'application/json' },
         body: JSON.stringify({ state: stored.label, attributes: { friendly_name: `${tankId} program plan`, tank: tankId, plan: stored } }),
       });
