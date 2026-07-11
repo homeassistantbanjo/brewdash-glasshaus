@@ -88,20 +88,23 @@ async function tickTank(tankId, by) {
   const currentSetpointF = numOr(by[`number.${tankId}_setpoint_raw`]?.state) != null
     ? numOr(by[`number.${tankId}_setpoint_raw`].state) / 10 : null;
 
-  // gravity staleness: signal-lost sensor OR gravity age > threshold
-  const gravityStale = by['binary_sensor.tilt_black_signal_lost']?.state === 'on';
   const confirmPressed = pendingConfirm.has(tankId);
+  // PER-TANK control inputs published by deriveTank (which ran first this tick),
+  // NOT the global Black sensors. deriveTank resolves each tank's OWN Tilt/batch, so
+  // control keys off the right gravity/og/attenuation. If deriveTank hasn't published
+  // (shouldn't happen — it runs first — but be safe), fall back to a stale/hold state.
+  const ci = controlInputs.get(tankId) || { gravityStale: true };
 
   const state = {
     phaseIndex, phaseElapsedHours, currentSetpointF,
     phaseStartSetpointF: numOr(phaseStartSetpoints.get(tankId), currentSetpointF),
-    gravityStale, confirmPressed,
-    gravity: numOr(s('sensor.tilt_black_gravity')),
-    expectedFg: numOr(s(`input_number.${tankId}_expected_fg`)),
-    og: numOr(s('sensor.batch_og')),
-    apparentAttenuationPct: numOr(s('sensor.apparent_attenuation')),
-    progressToFgPct: numOr(s('sensor.attenuation_progress')),
-    gravity24hDeltaPts: numOr(s('sensor.gravity_24h_delta')),
+    gravityStale: ci.gravityStale, confirmPressed,
+    gravity: ci.gravity ?? null,
+    expectedFg: ci.expectedFg ?? null,
+    og: ci.og ?? null,
+    apparentAttenuationPct: ci.attenuationPct ?? null,
+    progressToFgPct: ci.progressToFgPct ?? null,
+    gravity24hDeltaPts: ci.delta ?? null,
     // the assigned batch's strain expected attenuation (Brewfather yeast spec) —
     // drives the attenuationOfExpected advance type in Claude-generated plans.
     expectedAttenuationPct: expectedAttenuationFor(tankId, by),
@@ -253,6 +256,13 @@ async function writeStatus(tankId, obj) {
 // ---------------------------------------------------------------------------
 const gravWindow = new Map();   // tankId → [{t, sg}] rolling ~8h for the settling-proof peak
 const latchState = new Map();   // tankId → { batchKey, latched } one-shot fermentation-started
+// PER-TANK control inputs, resolved by deriveTank each tick and consumed by tickTank.
+// Fixes the single-tank-era bug where tickTank read GLOBAL Black sensors
+// (sensor.tilt_black_gravity, sensor.batch_og, sensor.apparent_attenuation) for
+// EVERY tank — so all tanks' control keyed off tank_1's Black Tilt. Now each tank's
+// control uses ITS OWN resolved gravity/og/attenuation (same values deriveTank
+// already computes), so multi-tank control is correct and testable in isolation.
+const controlInputs = new Map();   // tankId → { gravity, og, expectedFg, attenuationPct, progressToFgPct, delta, gravityStale }
 
 // resolve a tank's live gravity/temp from its ASSIGNED Tilt color (generic — any color)
 function tiltData(by, tiltColor) {
@@ -389,6 +399,18 @@ async function deriveTank(tankId, by) {
     dryHopped,
     conditionDays: facts?.conditionDays ?? null,
   }, Date.now());
+
+  // publish THIS tank's resolved control inputs for tickTank (single source of truth
+  // — no re-deriving off global sensors). gravityStale mirrors deriveTank's own
+  // signal-lost gating: no gravity, or a stale reading, means "don't trust it".
+  controlInputs.set(tankId, {
+    gravity, og,
+    expectedFg: num(s(`input_number.${tankId}_expected_fg`)),
+    attenuationPct: d.attenuationPct ?? null,
+    progressToFgPct: d.progressToFgPct ?? null,
+    delta,
+    gravityStale: gravity == null || (ageMin != null && ageMin > 20),
+  });
 
   // maintain state, and PERSIST any change to the HA helpers (survives reboots).
   const before = { latched: st.latched, stableSinceMs: st.stableSinceMs };
