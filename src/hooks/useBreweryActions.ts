@@ -55,9 +55,14 @@ export function useBreweryActions() {
       call('input_select', 'select_option', `input_select.${t}_tilt`, { option: v }, `${label(t)} Tilt → ${v}`),
     /** Assign a batch by writing the Brewfather batch NUMBER (stable ID) as free
      *  text — no options list, so HA can never reset it on restart. Empty string
-     *  = unassigned. The picker passes the batchNo; display resolves it live. */
-    setBatch: (t: string, batchNo: string) =>
-      call('input_text', 'set_value', `input_text.${t}_batch`, { value: batchNo }, `${label(t)} batch → ${batchNo || 'unassigned'}`),
+     *  = unassigned. The picker passes the batchNo; display resolves it live.
+     *  Also sets the TANK status: assigning a batch → Fermenting (the HA tank status
+     *  is separate from the BF batch status, and the card keys off having a batch;
+     *  this keeps the tank status coherent). Unassigning → Ready. */
+    setBatch: async (t: string, batchNo: string) => {
+      await call('input_text', 'set_value', `input_text.${t}_batch`, { value: batchNo }, `${label(t)} batch → ${batchNo || 'unassigned'}`);
+      await callQuiet('input_select', 'select_option', `input_select.${t}_status`, { option: batchNo ? 'Fermenting' : 'Ready' });
+    },
     setExpectedFg: (t: string, fg: number) =>
       call('input_number', 'set_value', `input_number.${t}_expected_fg`, { value: fg }, `${label(t)} expected FG → ${fg}`),
     markCleaned: (t: string, iso: string) =>

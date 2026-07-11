@@ -94,9 +94,13 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
   focused?: boolean;
   onClick: () => void;
 }) {
-  // "active brew" = Fermenting OR Cold Crashing — both hold live beer and get the
-  // full data card. (Named `fermenting` for legacy reasons; means active-brew.)
-  const fermenting = isActiveBrew(tank.status) && batch != null;
+  // Show the full data card whenever a BATCH is assigned — batch presence drives the
+  // display, NOT the manual tank-status enum. (Previously gated on
+  // isActiveBrew(tank.status), so assigning a batch to a 'Ready' tank showed NOTHING
+  // until you also manually set status→Fermenting. Now: assign a batch → card shows
+  // it. Cold Crashing still recognized for its special header.) `fermenting` name is
+  // legacy = "has live beer / full card".
+  const fermenting = batch != null;
   const crashing = tank.status === 'Cold Crashing';
   // active fermentation-program phase (drives the header when a program runs)
   const programPhase = useProgramPhase(tank.id);
