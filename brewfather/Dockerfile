@@ -5,6 +5,6 @@
 #   BF_USERID, BF_APIKEY, [PORT=8093], [ALLOW_ORIGIN=*]
 FROM node:22-alpine
 WORKDIR /app
-COPY package.json server.mjs ./
+COPY package.json server.mjs capture.mjs db.mjs ./
 EXPOSE 8093
 CMD ["node", "server.mjs"]

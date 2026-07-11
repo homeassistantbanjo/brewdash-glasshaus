@@ -11,6 +11,8 @@
 //
 // Config via env (NEVER git): BF_USERID, BF_APIKEY, [PORT=8093], [ALLOW_ORIGIN=*].
 import { createServer } from 'node:http';
+import { captureBatch } from './capture.mjs';
+import { addEvent, addTasting, getBatch, getTastings, listBatches, getReadings } from './db.mjs';
 
 const BF_USERID = required('BF_USERID');
 const BF_APIKEY = required('BF_APIKEY');
@@ -511,6 +513,76 @@ createServer((req, res) => {
         console.error('[brewfather] status write failed:', e.message);
         sendJson(res, 502, { error: e.message });
       }
+    });
+    return;
+  }
+
+  // POST /batch/:id/complete → the manual "Complete batch" action. Captures the
+  // FULL record to the batch DB (measured + temp/gravity curve + summary) AND writes
+  // the WRITABLE subset back to Brewfather (status→Completed + measuredFg). Body may
+  // include { fg, daysConditioned, profileId, planJson } that GlassHaus knows.
+  const completeMatch = req.method === 'POST' && req.url?.match(/^\/batch\/([^/?]+)\/complete/);
+  if (completeMatch) {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', async () => {
+      let parsed; try { parsed = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { error: 'bad json' }); }
+      try {
+        const arg = decodeURIComponent(completeMatch[1]);
+        const bf = await bfGetBatch(arg);                 // measured + recipe + curve
+        const fg = n(parsed.fg) ?? bf.measured?.fg ?? null; // terminal gravity to record
+        // 1) capture the complete record to the DB
+        const extra = { completed_at: Date.now(), days_conditioned: n(parsed.daysConditioned) ?? null };
+        if (parsed.profileId != null) extra.profile_id = parsed.profileId;
+        if (parsed.planJson) extra.plan_json = typeof parsed.planJson === 'string' ? parsed.planJson : JSON.stringify(parsed.planJson);
+        if (fg != null) { bf.measured = { ...(bf.measured || {}), fg }; }
+        const cap = captureBatch(bf, extra);
+        addEvent(cap.batchId, 'complete', `fg=${fg ?? '?'}`);
+        // 2) write the WRITABLE subset back to Brewfather (status + measuredFg)
+        const patch = { status: 'Completed' };
+        if (fg != null) patch.fg = fg;
+        await bfPatchBatch(arg, patch);
+        try { invalidate(await resolveId(arg)); } catch { /* ignore */ }
+        _brewdayCache = { at: 0, list: null };
+        console.log(`[brewfather] COMPLETE batch ${arg}: DB record #${cap.batchId}, ${cap.readingsInserted} readings, BF status→Completed fg=${fg}`);
+        sendJson(res, 200, { ok: true, batchId: cap.batchId, readingsCaptured: cap.readingsInserted, fg, bf: 'Completed' });
+      } catch (e) {
+        console.error('[brewfather] complete failed:', e.message);
+        sendJson(res, 502, { error: e.message });
+      }
+    });
+    return;
+  }
+
+  // GET /history → list captured batches (for the metrics/history view)
+  if (req.method === 'GET' && req.url?.startsWith('/history')) {
+    try { sendJson(res, 200, { batches: listBatches(200) }); }
+    catch (e) { sendJson(res, 500, { error: e.message }); }
+    return;
+  }
+  // GET /record/:batchNo → one batch's full DB record (batch + readings + tastings)
+  const recordMatch = req.method === 'GET' && req.url?.match(/^\/record\/(\d+)/);
+  if (recordMatch) {
+    try {
+      const b = getBatch(Number(recordMatch[1]));
+      if (!b) return sendJson(res, 404, { error: 'not captured' });
+      sendJson(res, 200, { batch: b, readings: getReadings(b.id), tastings: getTastings(b.id) });
+    } catch (e) { sendJson(res, 500, { error: e.message }); }
+    return;
+  }
+  // POST /record/:batchNo/tasting → log a tasting/outcome observation
+  const tastingMatch = req.method === 'POST' && req.url?.match(/^\/record\/(\d+)\/tasting/);
+  if (tastingMatch) {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      let parsed; try { parsed = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { error: 'bad json' }); }
+      try {
+        const b = getBatch(Number(tastingMatch[1]));
+        if (!b) return sendJson(res, 404, { error: 'batch not captured — complete it first' });
+        addTasting(b.id, parsed);
+        sendJson(res, 200, { ok: true, tastings: getTastings(b.id).length });
+      } catch (e) { sendJson(res, 500, { error: e.message }); }
     });
     return;
   }
