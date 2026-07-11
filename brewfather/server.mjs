@@ -13,6 +13,7 @@
 import { createServer } from 'node:http';
 import { captureBatch } from './capture.mjs';
 import { addEvent, addTasting, getBatch, getTastings, listBatches, getReadings } from './db.mjs';
+import { isDiastaticYeast, parsePlanJson } from './planlogic.mjs';
 
 const BF_USERID = required('BF_USERID');
 const BF_APIKEY = required('BF_APIKEY');
@@ -350,10 +351,25 @@ RULES:
   free-rise/D-rest step advances at "terminal" (gravity flat near FG). This handles slow starts.
 - Include a free-rise / diacetyl-rest step when the style/yeast benefits (most ales & lagers);
   lagers stay cool then rise; kveik runs warm; hazy/NEIPA free-rise for biotransformation.
+- SAISON / FARMHOUSE strains want a HOT finish: pitch cool-to-moderate (~66-70°F) to control
+  the fast early phase, then FREE-RISE aggressively into the mid-80s°F (85-90°F) to finish dry,
+  peppery and attenuate fully. Do NOT cap a saison at ale temps — a stuck-cool saison stalls.
+- The message includes a verified STRAIN METABOLIC PROFILE (diastatic, pof, glycerol, flocculation,
+  hotFinish, attenuationCeilingPct, tempRangeF). HONOR IT over generic assumptions.
+- If profile.diastatic is true (STA1+ — French/Belgian saison, Belle Saison, Brett, diastaticus):
+  the strain keeps consuming dextrins for WEEKS past apparent flatness, so gravity going flat is
+  NOT true terminal. Then: (a) do NOT advance the finishing step on "terminal" alone — require
+  attenuationOfExpected pct >= 95 AND hold longer; (b) make the conditioning hold LONGER; (c) warn
+  in a "why" that a dry-hop can restart fermentation (glucoamylase + hop enzymes → over-attenuation/
+  gushing), so hold dry-hop until gravity is truly stable for 2+ weeks.
+- If profile.pof is true, expect 4-VG phenolics (clove/pepper) at warmer temps; if false, keep clean.
+  If profile.hotFinish is true, drive the warm free-rise finish described above.
 - End with a conditioning hold, then a cold-crash step. The cold-crash step MUST have
   requiresConfirm:true (the brewer tastes & confirms before crashing — never auto).
-- clamp.maxF must not exceed the yeast's max temp; for any lager, clamp.maxF <= 70.
-- Every step needs a short "why" (the reasoning shown to the brewer).
+- clamp.maxF must not exceed the yeast's max temp; for any lager, clamp.maxF <= 70. For a saison,
+  clamp.maxF should permit the hot finish (up to the strain's max, typically ~90°F).
+- Every step needs a short "why" (the reasoning shown to the brewer). If the strain is diastatic,
+  say so explicitly in at least one "why".
 
 Primitives: hold {tempF} | ramp {stepF, everyHours, targetF} | wait {hours} | coldCrash
 {targetF, stepF, everyHours}. Advance types: attenuationOfExpected {pct} | terminal | active |
@@ -371,6 +387,9 @@ async function batchFacts(id) {
     name: y.name, lab: y.laboratory, productId: y.productId, type: y.type, form: y.form,
     attenuation: y.attenuation ?? y.maxAttenuation ?? null, minTempC: y.minTemp, maxTempC: y.maxTemp,
     flocculation: y.flocculation,
+    // Cheap name-based diastatic guess. This is a FALLBACK only — the authoritative
+    // traits come from strainProfile() (Claude's genomic knowledge) when a key is set.
+    diastaticGuess: isDiastaticYeast(y),
   }));
   return {
     batchNo: b.batchNo, style: rec.style?.name || null, name: rec.name || b.name,
@@ -383,21 +402,64 @@ async function batchFacts(id) {
 async function suggestIntents(batchIdOrNo) {
   if (!ANTHROPIC_KEY) throw new Error('no ANTHROPIC_API_KEY');
   const facts = await batchFacts(await resolveId(batchIdOrNo));
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-    body: JSON.stringify({ model: PLAN_MODEL, max_tokens: 400,
-      system: `Given a yeast strain + style, list the 3-5 realistic FLAVOR-PROFILE intents a brewer
+  const text = await askClaude({
+    maxTokens: 400,
+    system: `Given a yeast strain + style, list the 3-5 realistic FLAVOR-PROFILE intents a brewer
 might target with THIS yeast (temperature drives ester/phenol expression). E.g. a hefeweizen yeast
 → "Banana-forward","Clove-forward","Balanced"; a clean American ale yeast → "Clean/neutral","Slight
 fruit","Max attenuation". Output ONLY JSON: {"intents":[{"label":"...","hint":"how temp achieves it"}]}`,
-      messages: [{ role: 'user', content: JSON.stringify({ style: facts.style, yeasts: facts.yeasts }) }] }),
+    user: JSON.stringify({ style: facts.style, yeasts: facts.yeasts }),
+  });
+  const parsed = parsePlanJson(text) || { intents: [] };
+  return { batchNo: facts.batchNo, yeast: facts.yeasts[0]?.name || null, intents: parsed.intents || [] };
+}
+
+// One place to call Claude Messages + get back the assistant text. Throws on API error.
+async function askClaude({ system, user, maxTokens = 800 }) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({ model: PLAN_MODEL, max_tokens: maxTokens, system,
+      messages: [{ role: 'user', content: user }] }),
   });
   const j = await res.json();
-  if (j.error) throw new Error(j.error.message);
-  const text = (j.content?.[0]?.text ?? '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
-  let parsed; try { parsed = JSON.parse(text); } catch { parsed = { intents: [] }; }
-  return { batchNo: facts.batchNo, yeast: facts.yeasts[0]?.name || null, intents: parsed.intents || [] };
+  if (j.error) throw new Error(`${j.error.type}: ${j.error.message}`);
+  return j.content?.[0]?.text ?? '';
+}
+
+// STRAIN PROFILE — ask Claude for the strain's genomic/metabolic traits, because it
+// knows the yeast literature (STA1/diastatic status, POF+ phenolics, glycerol output,
+// flocculation, real temp range, attenuation ceiling) far better than any name list
+// we could maintain. The returned traits drive the plan (diastatic → don't call
+// terminal early / hold dry-hop; POF+ → phenolic character; hot-finish strains, etc.).
+// Falls back to Brewfather's numbers + the name-regex guess if the call fails.
+const STRAIN_SYSTEM = `You are a yeast scientist. Given a brewing yeast (name, lab, product ID, style
+context), report its documented genomic/metabolic traits. Use real strain knowledge (e.g. WLP590
+French Saison is STA1+/diastatic, POF+, low-flocculating, high glycerol, tolerates 90°F+).
+Output ONLY JSON, no prose/fences:
+{"diastatic":bool,            // STA1+ / glucoamylase — keeps drying for weeks, over-attenuates
+ "pof":bool,                  // POF+ → 4-VG phenolics (clove/pepper); false = clean
+ "glycerol":"low|medium|high",// glycerol/mouthfeel contribution
+ "flocculation":"low|medium|high",
+ "attenuationCeilingPct":N,   // realistic max apparent attenuation for THIS strain
+ "tempRangeF":{"min":N,"max":N}, // usable fermentation range, °F
+ "hotFinish":bool,            // benefits from a warm free-rise finish (saison/kveik)
+ "notes":"<=160 chars of fermentation-relevant quirks (dry-hop creep risk, etc.)"}`;
+
+async function strainProfile(yeast, style) {
+  if (!ANTHROPIC_KEY || !yeast) return null;
+  try {
+    const text = await askClaude({
+      system: STRAIN_SYSTEM, maxTokens: 400,
+      user: JSON.stringify({ name: yeast.name, lab: yeast.lab, productId: yeast.productId,
+        type: yeast.type, style, bfAttenuation: yeast.attenuation,
+        bfTempC: { min: yeast.minTempC, max: yeast.maxTempC } }),
+    });
+    return parsePlanJson(text); // reuse the tolerant JSON extractor
+  } catch (e) {
+    console.error('[brewfather] strainProfile failed, using fallback:', e.message);
+    return null;
+  }
 }
 
 async function generatePlan(batchIdOrNo, intent, notes) {
@@ -405,22 +467,35 @@ async function generatePlan(batchIdOrNo, intent, notes) {
   const id = await resolveId(batchIdOrNo);
   const facts = await batchFacts(id);
   const yeasts = facts.yeasts;
+  // Resolve the primary strain's genomic traits (Claude's knowledge) up front, so the
+  // plan is built from verified traits — diastatic status, POF, hot-finish, etc. — not
+  // guesses. Fall back to the name-regex when the profile call is unavailable.
+  const profile = await strainProfile(yeasts[0], facts.style);
+  const traits = profile || {
+    diastatic: yeasts[0]?.diastaticGuess ?? false,
+    notes: 'strain-profile lookup unavailable — using Brewfather numbers + name heuristic',
+  };
   const goal = [intent && `Target flavor profile: ${intent}.`, notes && `Brewer notes: ${notes}.`]
     .filter(Boolean).join(' ') || 'No specific flavor target — brew it to style.';
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-    body: JSON.stringify({ model: PLAN_MODEL, max_tokens: 1200, system: PLAN_SYSTEM,
-      messages: [{ role: 'user', content: `${goal}\n\nDesign a fermentation plan for:\n${JSON.stringify(facts, null, 1)}` }] }),
+  // The strain traits are the AUTHORITATIVE metabolic input (verified genomics), so
+  // pass them alongside the raw batch facts. The plan prompt's diastatic/saison rules
+  // key off these — e.g. traits.diastatic → don't call terminal early, hold dry-hop.
+  const raw = await askClaude({
+    system: PLAN_SYSTEM, maxTokens: 1200,
+    user: `${goal}\n\nStrain metabolic profile (authoritative — honor these traits):\n`
+      + `${JSON.stringify(traits, null, 1)}\n\nDesign a fermentation plan for:\n`
+      + `${JSON.stringify(facts, null, 1)}`,
   });
-  const j = await res.json();
-  if (j.error) throw new Error(`${j.error.type}: ${j.error.message}`);
-  const text = (j.content?.[0]?.text ?? '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
-  let plan; try { plan = JSON.parse(text); } catch { throw new Error('Claude returned unparseable plan'); }
+  const plan = parsePlanJson(raw);
+  if (!plan) {
+    console.error('[brewfather] unparseable plan text:', raw.slice(0, 500));
+    throw new Error('Claude returned unparseable plan');
+  }
   // ensure expectedAtten present (fall back to the strain spec) + gate any cold crash
   if (plan.expectedAtten == null && yeasts[0]?.attenuation != null) plan.expectedAtten = yeasts[0].attenuation;
   for (const ph of (plan.phases || [])) if (ph.kind === 'coldCrash') ph.requiresConfirm = true;
-  return { ...plan, batchNo: facts.batchNo, yeast: yeasts[0]?.name || null };
+  // surface the resolved traits so the UI/brewer can see WHY (diastatic warnings etc.)
+  return { ...plan, batchNo: facts.batchNo, yeast: yeasts[0]?.name || null, strainTraits: traits };
 }
 
 createServer((req, res) => {
