@@ -23,6 +23,11 @@ const HA_TOKEN = req('HA_TOKEN');
 const TICK_MINUTES = Number(process.env.TICK_MINUTES || 5);
 const DRY_RUN = /^(1|true|yes)$/i.test(process.env.DRY_RUN || '');
 const TANKS = (process.env.TANKS || 'tank_1,tank_2,tank_3').split(',').map((t) => t.trim());
+// DEMO ONLY: multiply how fast each phase's clock runs. TIME_SCALE=3600 makes one
+// phase-*hour* elapse in one real *second*, so a program with elapsed-based advances
+// (and ramp everyHours steps) flows through its phases in seconds instead of days —
+// for watching the machine drive setpoints live. 1 = real time (production default).
+const TIME_SCALE = Math.max(1, Number(process.env.TIME_SCALE || 1));
 
 function req(k) { const v = process.env[k]; if (!v) { console.error(`missing env ${k}`); process.exit(1); } return v; }
 const H = { Authorization: `Bearer ${HA_TOKEN}`, 'content-type': 'application/json' };
@@ -83,8 +88,10 @@ async function tickTank(tankId, by) {
 
   const phaseIndex = numOr(s(`input_number.${tankId}_program_phase`), 0);
   const phaseStartedIso = s(`input_datetime.${tankId}_program_phase_started`);
+  // TIME_SCALE accelerates the phase clock for the live demo (see env def). At 1 it's
+  // real elapsed hours; at 3600 one real second counts as one phase-hour.
   const phaseElapsedHours = phaseStartedIso
-    ? (Date.now() - Date.parse(phaseStartedIso)) / 3.6e6 : 0;
+    ? ((Date.now() - Date.parse(phaseStartedIso)) / 3.6e6) * TIME_SCALE : 0;
   const currentSetpointF = numOr(by[`number.${tankId}_setpoint_raw`]?.state) != null
     ? numOr(by[`number.${tankId}_setpoint_raw`].state) / 10 : null;
 
@@ -560,6 +567,6 @@ async function writeHealth(by) {
   });
 }
 
-console.log(`[programs] runner up. tick every ${TICK_MINUTES}min. DRY_RUN=${DRY_RUN}. tanks=${TANKS}`);
+console.log(`[programs] runner up. tick every ${TICK_MINUTES}min. DRY_RUN=${DRY_RUN}. TIME_SCALE=${TIME_SCALE}x. tanks=${TANKS}`);
 tickAll();
 setInterval(tickAll, TICK_MINUTES * 60_000);
