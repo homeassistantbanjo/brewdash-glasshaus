@@ -235,14 +235,24 @@ export function composeBatch(
   const og = bf.measuredOg;
   const sg = gravity.value;
 
-  // velocity: prefer the live Tilt 24h-change stat; fall back to slope of the
-  // Brewfather reading history if the stat sensor isn't present.
-  const gravityVelocityPerDay =
-    tilt?.gravity24hChange?.value ?? historyVelocityPerDay(bf.history, now);
-  const gravityNoise = tilt?.gravity3hStddev?.value ?? null;
+  // Is the live gravity physically implausible? (Tilt fallen / in water / lifted
+  // out.) When so, we must NOT compute or display gravity-derived numbers — a
+  // 124% attenuation or negative ABV is worse than showing nothing. Null them all
+  // and surface the reason. The raw `gravity` Reading is kept (diagnostics/history).
+  const suspectReason = gravitySuspectReason(og, sg);
+  const gravitySuspect = suspectReason != null;
+  const usableSg = gravitySuspect ? null : sg;
 
-  const attenuationProgress = calcAttenuationProgress(og, sg, expectedFg);
-  const daysToTerminal = calcDaysToTerminal(sg, expectedFg, gravityVelocityPerDay);
+  // velocity: prefer the live Tilt 24h-change stat; fall back to slope of the
+  // Brewfather reading history if the stat sensor isn't present. Suppressed when
+  // the gravity is suspect (velocity off a bad reading is meaningless).
+  const gravityVelocityPerDay = gravitySuspect
+    ? null
+    : (tilt?.gravity24hChange?.value ?? historyVelocityPerDay(bf.history, now));
+  const gravityNoise = gravitySuspect ? null : (tilt?.gravity3hStddev?.value ?? null);
+
+  const attenuationProgress = calcAttenuationProgress(og, usableSg, expectedFg);
+  const daysToTerminal = calcDaysToTerminal(usableSg, expectedFg, gravityVelocityPerDay);
 
   return {
     batchNo: bf.batchNo,
@@ -260,8 +270,8 @@ export function composeBatch(
     expectedFg,
     fermentingStart: bf.fermentingStart,
 
-    abv: calcAbv(og, sg),
-    attenuation: calcAttenuation(og, sg),
+    abv: calcAbv(og, usableSg),
+    attenuation: calcAttenuation(og, usableSg),
     daysFermenting: calcDaysFermenting(bf.fermentingStart, now),
 
     gravityVelocityPerDay,
@@ -292,6 +302,8 @@ export function composeBatch(
     readyToKeg: false,
 
     verification: verifyAssignment(beerTemp.value, tank.probeTemp.value, now),
+    gravitySuspect,
+    gravitySuspectReason: suspectReason,
   };
 }
 

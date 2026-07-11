@@ -53,15 +53,21 @@ export const WATCHLIST = [
 // expected, not an incident).
 export function tankChecks(tankId, by) {
   const out = [];
-  // controller plug: entity id differs per tank (some are *_temp_controller_power,
-  // some *_temperature_controller). Probe both; alert if BOTH missing → we treat
-  // the tank as having no controller wired (the known tank_2/3 case) — surfaced as
-  // a low-severity note only when a batch is present.
+  // A tank's temp controller can be exposed two ways, and NOT every tank has both:
+  //   1. a Kasa SWITCH in front of the Inkbird (tank_1: *_temp_controller_power,
+  //      tank_3: *_temperature_controller) — availability IS the liveness signal.
+  //   2. the ITC-308 itself, as sensor.tank_N_probe_temp_c + number.tank_N_setpoint_raw
+  //      (tank_2 controls this way with NO Kasa switch at all).
+  // The controller is "wired" if EITHER is present. Only checking the switch (the
+  // old bug) falsely flagged tank_2 — which has a live probe+setpoint but no plug —
+  // as having no controller. This mirrors the dashboard's hasController exactly.
   const ctrlIds = [
     `switch.${tankId}_temp_controller_power`,
     `switch.${tankId}_temperature_controller`,
   ];
   const ctrl = ctrlIds.map((id) => by[id]).find(Boolean);
+  const hasProbeSetpoint =
+    by[`sensor.${tankId}_probe_temp_c`] != null && by[`number.${tankId}_setpoint_raw`] != null;
   const hasBatch = batchAssigned(tankId, by);
   if (ctrl) {
     // controller plug present → its availability is the temp-control liveness
@@ -69,6 +75,9 @@ export function tankChecks(tankId, by) {
       id: ctrl.entity_id, kind: 'avail', severity: hasBatch ? 'critical' : 'warning',
       label: `${up(tankId)} temp controller (Inkbird plug)`,
     });
+  } else if (hasProbeSetpoint) {
+    // ITC-308 exposed directly (no Kasa switch) — the controller IS wired; watch the
+    // probe freshness below rather than a plug's availability. No "no controller" nag.
   } else if (hasBatch) {
     out.push({
       synthetic: true, key: `${tankId}_no_controller`, severity: 'warning',

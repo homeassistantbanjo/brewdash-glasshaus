@@ -1,11 +1,22 @@
 # GlassHaus — optional compose (if you use the Compose Manager plugin). On stock
 # Unraid you'll more likely use the Docker tab "Add Container" — see deploy/README.md.
 # Pulls the PREBUILT image from ghcr (built by GitHub Actions); token injected at runtime.
+# Bound container log size so a chatty service can't fill the docker vDisk, and keep
+# a few rotations of recent history. NOTE: these logs still live on the container and
+# are wiped when it's recreated (every deploy) — for logs that SURVIVE deploys and are
+# queryable across the estate, ship stdout → Loki (planned in HausWatch).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"      # rotate a log file at 10MB
+    max-file: "5"        # keep 5 → ~50MB ceiling per container
+
 services:
   glasshaus:
     container_name: glasshaus
     image: ghcr.io/homeassistantbanjo/brewdash-glasshaus:latest
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "8099:80"                       # http://<unraid-tailscale>:8099/
     environment:

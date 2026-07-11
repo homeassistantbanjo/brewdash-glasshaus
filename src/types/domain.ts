@@ -318,6 +318,15 @@ export interface ActiveBatch {
   history: BatchReading[];
 
   verification: AssignmentVerification;
+
+  /** the live gravity is physically implausible (Tilt fallen / in water / lifted
+   *  out): SG < ~0.995 or apparent attenuation > ~100.5%. When true, all
+   *  gravity-derived tiles (gravity, attenuation, ABV, progress, velocity) are
+   *  nulled so the card shows '—' rather than misleading garbage; the reason is
+   *  surfaced as a 'gravity_suspect' alert. */
+  gravitySuspect: boolean;
+  /** human explanation when gravitySuspect is true, else null */
+  gravitySuspectReason: string | null;
 }
 
 /** One historical Tilt reading, normalized to app units (°F, SG). */

@@ -355,7 +355,8 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
             const glyph = al.severity === 'milestone' ? '◆' : al.severity === 'warning' ? '◇' : '⚠';
             const suffix = al.key === 'assignment_suspect'
               && batch!.verification.status === 'suspect'
-              ? ` — ${batch!.verification.reason}` : '';
+              ? ` — ${batch!.verification.reason}`
+              : al.detail ? ` — ${al.detail}` : '';
             return (
               <div key={al.key} style={{
                 fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 0.5,

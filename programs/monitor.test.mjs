@@ -113,7 +113,18 @@ test('empty tank + controller offline → only WARNING, not critical', () => {
   assert.ok(c && c.severity === 'warning');
 });
 
-test('tank with batch but NO controller wired → synthetic warning', () => {
+test('tank with batch + ITC-308 (probe_c + setpoint_raw, no Kasa switch) → controller wired, NO nag', () => {
+  // tank_2's real hardware: controls via the ITC-308 directly, no switch plug.
+  const by = healthyBy();
+  by['input_text.tank_2_batch'] = { state: '150' };
+  by['sensor.tank_2_probe_temp_c'] = { entity_id: 'sensor.tank_2_probe_temp_c', state: '25.2', last_updated: iso(1 * MIN) };
+  by['number.tank_2_setpoint_raw'] = { entity_id: 'number.tank_2_setpoint_raw', state: '770', last_updated: iso(1 * MIN) };
+  const checks = tankChecks('tank_2', by);
+  assert.ok(!checks.some((x) => x.synthetic && x.key === 'tank_2_no_controller'),
+    'ITC-308-direct tank must NOT be flagged no-controller');
+});
+
+test('tank with batch and TRULY no controller (no switch, no probe/setpoint) → synthetic warning', () => {
   const by = healthyBy();
   by['input_text.tank_2_batch'] = { state: '150' };
   const checks = tankChecks('tank_2', by);
