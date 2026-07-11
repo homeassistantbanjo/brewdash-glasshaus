@@ -481,7 +481,10 @@ async function deriveTank(tankId, by) {
     method: 'POST', headers: H,
     body: JSON.stringify({
       state: d.alerts[0]?.label || (d.fermentationStarted ? 'fermenting' : 'nominal'),
-      attributes: { friendly_name: `${tankId} derived`, tank: tankId, ...d, dryHop: dryHopped, bfStatus: facts?.status ?? null, bfConditioned },
+      // expose the RESOLVED og (from BF batch OR the container fallback) so other
+      // services (analyzer) don't re-resolve it off the Fermenting-only HA feed and
+      // wrongly see null for a Conditioning batch → the intermittent "no OG" warning.
+      attributes: { friendly_name: `${tankId} derived`, tank: tankId, ...d, og: og ?? null, dryHop: dryHopped, bfStatus: facts?.status ?? null, bfConditioned },
     }),
   }).catch((e) => console.error(`[${tankId}] derived write failed:`, e.message));
 

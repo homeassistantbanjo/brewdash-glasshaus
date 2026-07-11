@@ -63,11 +63,16 @@ function gatherTank(by, tankId) {
     tank: tankId,
     active,
     tankStatus,
+    // OG: the HA feed only carries FERMENTING batches, so a CONDITIONING batch
+    // (e.g. #144) isn't in `batch` → its measuredOg is null there. The runner already
+    // resolves OG (with a Brewfather-container fallback) and publishes it on the
+    // derived sensor as attrs.og — use that so the analyzer doesn't falsely report
+    // "no OG, log it in Brewfather" every run on a conditioning batch.
     batch: batch
       ? { name: batch.name, batchNo: batch.batchNo, style: batch.recipe?.style?.name || batch.style,
-          og: batch.measuredOg ?? null, fermentingStart: batch.fermentingStart,
+          og: batch.measuredOg ?? num(attrs.og) ?? null, fermentingStart: batch.fermentingStart,
           targetTempC: batch.target_temperature }
-      : { name: batchSel || null, og: null },
+      : { name: batchSel || null, og: num(attrs.og) ?? null },
     tilt: tiltSel || 'None',
     live: {
       // TWO distinct metrics — do NOT conflate. apparentAttenuationPct = TRUE

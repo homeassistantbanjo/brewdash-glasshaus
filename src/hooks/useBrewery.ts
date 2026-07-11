@@ -613,7 +613,7 @@ function useConditioningBatchFallback(
   useEffect(() => {
     if (!missing.length) return;
     let cancelled = false;
-    (async () => {
+    const load = async () => {
       const results: Array<[string, BrewfatherBatch]> = [];
       for (const key of missing) {
         try {
@@ -645,6 +645,10 @@ function useConditioningBatchFallback(
           }]);
         } catch { /* leave it missing; card degrades to unassigned as before */ }
       }
+      // Merge results; NEVER remove a previously-resolved key. A transient fetch
+      // miss (502/timeout) must not blank an already-known batch — that was the
+      // intermittent "no OG" flash on tank_1/#144 (Conditioning → not in the HA feed,
+      // so it relies on this fetch; a single miss dropped it to null).
       if (!cancelled && results.length) {
         setFetched((prev) => {
           const next = new Map(prev);
@@ -652,8 +656,10 @@ function useConditioningBatchFallback(
           return next;
         });
       }
-    })();
-    return () => { cancelled = true; };
+    };
+    load();                         // fetch now
+    const t = setInterval(load, 60_000);   // + keep warm so a transient miss self-heals
+    return () => { cancelled = true; clearInterval(t); };
     // re-run only when the SET of missing keys changes (not every render)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [missingKey]);
