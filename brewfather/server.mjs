@@ -135,9 +135,12 @@ async function resolveId(batchIdOrNo) {
   const list = await bfListBatches();
   const hit = list.find((b) => String(b.batchNo) === s);
   if (hit) return hit._id;
-  // not in the default list → sweep the active statuses explicitly (a Fermenting
-  // batch older than the 50 most-recent won't appear above but is real).
-  for (const status of ['Fermenting', 'Conditioning']) {
+  // not in the default list → sweep statuses explicitly (a batch older than the 50
+  // most-recent won't appear above but is real). MUST include Completed/Archived:
+  // once a batch is completed it leaves the active statuses, and we still need to
+  // resolve it (to correct an FG, re-read its record, etc.). Omitting Completed made
+  // a just-completed batch un-resolvable → PATCH 'no batch with number N'.
+  for (const status of ['Fermenting', 'Conditioning', 'Completed', 'Archived']) {
     try {
       const byStatus = await bfBatchesByStatus(status);
       const h = byStatus.find((b) => String(b.batchNo) === s);
