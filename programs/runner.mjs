@@ -78,10 +78,26 @@ async function callService(domain, service, data) {
   if (!r.ok) throw new Error(`${domain}.${service} HTTP ${r.status}`);
 }
 
+// Idle status object — published whenever a tank has no running program, so the
+// program_status sensor can NEVER go stale and show a phantom phase (which made the
+// card's phase label disagree with the live setpoint). The card reads this to decide
+// whether to show a phase; program:'None' + phase:'none' means "no program running".
+function idleStatus() {
+  return { status: 'idle', program: 'None', phase: 'none', phaseIndex: 0,
+    setpointF: null, awaitingConfirm: false, paused: false, done: false,
+    note: 'no program running' };
+}
+
 async function tickTank(tankId, by) {
   const s = (id) => by[`${id}`]?.state;
   const programKey = s(`input_select.${tankId}_program`);
-  if (!usable(programKey) || programKey === 'None') { adopted.delete(tankId); return; } // no program → reset adopt guard
+  if (!usable(programKey) || programKey === 'None') {
+    adopted.delete(tankId);                 // no program → reset adopt guard
+    // Publish idle so the status sensor reflects reality. Only write if it isn't
+    // ALREADY idle, to avoid bumping last_updated every tick for an idle tank.
+    if (s(`sensor.${tankId}_program_status`) !== 'idle') await writeStatus(tankId, idleStatus());
+    return;
+  }
 
   const program = resolveProgram(programKey, by, tankId);
   if (!program) { console.log(`[${tankId}] unknown program '${programKey}'`); return; }

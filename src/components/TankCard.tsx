@@ -36,12 +36,23 @@ function CollarPip({ pos, label, value, unit, color, glow }: {
 
 /** Read the active fermentation-program phase for a tank (from the programs
  *  container's sensor.tank_N_program_status). Returns the human phase label when a
- *  program is running, else null. Used to drive the header status. */
+ *  program is running, else null. Used to drive the header status.
+ *
+ *  Trust guard: the phase label is cross-checked against the LIVE program selection
+ *  (input_select.tank_N_program). If no program is selected, we return null even if
+ *  the status sensor still holds an old phase — this prevents the card from showing a
+ *  phantom phase (e.g. a frozen "Hot Diastatic Hold: 86°F") that disagrees with the
+ *  actual setpoint. The setpoint tile always reads the live number entity; this keeps
+ *  the phase label honest against the same source of truth. */
 function useProgramPhase(tankId: string): string | null {
   const e = useHaEntity(`sensor.${tankId}_program_status`);
+  const prog = useHaEntity(`input_select.${tankId}_program`);
   const a = (e?.attributes as any) ?? null;
+  // no program actively selected → never surface a phase, regardless of stale status
+  const progState = prog?.state?.toLowerCase();
+  if (!progState || progState === 'none' || progState === 'unknown' || progState === 'unavailable') return null;
   if (!a || !a.phase || a.phase === 'done') return null;
-  // ignore stale/idle statuses; only surface an actively-running phase
+  // ignore idle/none statuses; only surface an actively-running phase
   if (typeof a.phase === 'string' && a.phase.trim() && a.phase.toLowerCase() !== 'none') return a.phase;
   return null;
 }

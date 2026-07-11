@@ -134,8 +134,12 @@ export function tick(program, state) {
 
   // SAFETY: if gravity data is stale/lost, HOLD current setpoint and do NOT advance
   // condition-gated phases (don't act on bad data). Time-only phases may still advance.
+  // NOTE: 'attenuationOfExpected' MUST be here — it's the diastatic-aware advance type
+  // the saison/Brett plans use; without it a bad Tilt could advance a phase (e.g. call
+  // a diastatic beer "done") on garbage attenuation. This was the gap the saison trace
+  // surfaced.
   const conditionIsDataDriven = phase.advance
-    && ['attenuation', 'progressToFg', 'terminal', 'active'].includes(phase.advance.type);
+    && ['attenuation', 'attenuationOfExpected', 'progressToFg', 'terminal', 'active'].includes(phase.advance.type);
   if (state.gravityStale && conditionIsDataDriven) {
     return { setpointF: clampTemp(state.currentSetpointF ?? phase.tempF ?? 34, program.clamp),
       advanceTo: null, paused: true, note: 'gravity data stale — holding, not advancing' };
