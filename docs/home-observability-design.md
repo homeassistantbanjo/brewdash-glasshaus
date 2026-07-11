@@ -379,3 +379,134 @@ self-healed instead of rotting silently for hours like the glycol sensor did.
 - **SNMP enablement** on the Asus router (Administration → SNMP) — confirm before
   Phase 1 network scrape.
 - **Firewalla ingest:** MSP API vs HA integration vs Telegraf — pick when it arrives.
+
+---
+
+## Reasoning-layer decision (refined after the PBS ENOTEMPTY incident)
+
+Real incident that clarified the strategy: PBS logged, on every prune/GC cycle,
+`removing backup snapshot ".../JorYoga/<ts>" failed - Directory not empty (os error
+39)`. HausWatch caught the *symptom* from state (backup "missing 70h") but the
+*cause* was in the PBS task log. Two lessons:
+
+1. **Log aggregation is needed for RCA** — state says WHAT, logs say WHY.
+2. **Sending raw logs to any LLM is the exposure risk** (this one line alone leaks
+   mount paths, hostnames, datastore topology). Jordan's hesitation is correct and
+   MORE justified for infra logs than container logs.
+
+**Decision: a fallback LADDER, not one engine.** Build top-down; most incidents
+never reach the bottom rung:
+
+```
+error → 1. LOCAL fingerprint → runbook match   (majority; zero AI, zero exposure)
+        2. LOCAL Ollama on the idle RTX 3060    (classify/summarize; private, weaker)
+        3. SANITIZE → Claude                    (rare novel/hard case; scrubbed +
+                                                 EXPLICIT per-send approval)
+```
+
+- Local model reality check: the 3060's 12GB caps ~7–14B models. **Good at
+  matching/classification, mediocre at novel root-cause** (would confidently
+  mis-diagnose the PBS-on-NFS-async case). So Ollama is the cheap middle, NEVER the
+  last line for hard problems — Claude is, behind the sanitizer + Jordan's approval.
+- **Highest-leverage piece = rung 1, the local runbook library.** Incidents recur
+  and are recognizable; matching them locally means ~80% never leaves the house and
+  no LLM is even invoked. Build this FIRST; it makes the LLM choice far less urgent.
+- Raw logs NEVER leave the house. Only sanitized, approved excerpts reach Claude.
+
+### Seed runbook entry #1 (from this incident)
+- **Fingerprint:** source=PBS, log matches `Directory not empty (os error 39)` +
+  `removing backup snapshot` (prune/GC).
+- **Root cause:** PBS datastore on an Unraid **`/mnt/user` user-share exported over
+  NFS with `async` + `all_squash`** (`/etc/exports`: `"/mnt/user/backups" ...async...
+  all_squash`). shfs/FUSE + NFS async + silly-rename leave stray/uncommitted entries
+  so PBS's final `rmdir` hits ENOTEMPTY; prune fails, GC loops, new backups stall
+  (→ the "missing 70h" symptom).
+- **Fix (best):** move PBS datastore to a LOCAL real fs (ext4/XFS/ZFS) on the PBS
+  host. **Workarounds:** export `sync` not `async`; point PBS at `/mnt/diskN` not
+  `/mnt/user` (drop the shfs layer); match PBS `backup` uid instead of `all_squash`;
+  clear the stuck snapshot dir's stray `.nfs*` file so GC proceeds.
+- **Severity:** warning (backups degraded, not data loss). **Tier:** 2 (never
+  auto-remediate — touches backup storage; always surface to Jordan).
+
+### Local-LLM reconsidered: the 3060 is Plex's transcode GPU — DROP the local-LLM rung
+
+Correction to the ladder above: the RTX 3060 is **Plex's hardware-transcode GPU**
+(transcoding is infrequent — mostly Direct Play — but latency-CRITICAL when it
+happens: contention = a stuttering stream the household notices instantly).
+
+Running Ollama on that card would contend with the transcode path exactly when you
+least want it (VRAM residency on a tight 12GB, or on-demand spin-up racing a
+transcode). The local LLM's *only* advantage was privacy — but the **sanitizer
+delivers privacy without any GPU**, and Claude-for-novel is a network call, also no
+GPU. So the 3060 constraint removes the local LLM's reason to exist.
+
+**Revised ladder (final):**
+```
+error → 1. LOCAL runbook/fingerprint match   (CPU only, no GPU, no exposure, ~80%)
+        2. SANITIZE → Claude                  (rare novel case; scrubbed + approved)
+```
+No local LLM sharing the transcode GPU. If fully-offline reasoning is ever wanted,
+use a SEPARATE box or a CPU model — never the Plex GPU.
+
+**Bonus fingerprint (future):** once anything shares that GPU, "GPU hot/busy WITH an
+active Plex transcode session" = normal; "GPU busy with NO Plex session" = anomaly
+(something's using it that shouldn't). Correlate `plex active transcodes` with
+`tower_gpu_*_utilization`.
+
+### Risk model correction: LAN/Tailscale access-gating makes most leaked data INERT
+
+Jordan's point (correct — an earlier draft wrongly dismissed it): every system here
+(Unraid, PBS, HA, HausWatch's own dashboard/observer) is reachable ONLY from the LAN
+or an approved Tailscale device. That access control is a FIRST-CLASS mitigation for
+the log-exposure concern, because it changes the *harm* of a leak, not just the
+*likelihood*.
+
+Split log content into two kinds:
+- **DESCRIPTORS of systems** — internal paths (`/mnt/...`), hostnames (`tower`,
+  `JorYoga`), RFC1918 IPs (`192.168.50.x`), datastore layout, container/service
+  names, error text. Their only value to an attacker is RECON toward attacking those
+  systems — but the systems are unreachable without already being on the LAN/tailnet.
+  So if these leak, they are **effectively INERT**. This is the boring ~95% of infra
+  logs. Low likelihood of leaking + ~zero harm if they do.
+- **CONTENT that is sensitive in ITSELF** — credentials/API keys/tokens (a leaked key
+  grants access; access-gating doesn't neutralize it) and PII (paperless OCR = actual
+  documents; harmful as data regardless of which host it came from). This is the only
+  residue the LAN/Tailscale mitigation does NOT cover.
+
+**Consequence:** don't rely on a line-by-line denylist sanitizer as the primary
+defense. Classify by SOURCE:
+- Infra sources (PBS, Docker, HA core, network) → SAFE to escalate to Claude for
+  novel-error RCA. Still scrubbed (defense-in-depth), but a miss leaks only inert
+  descriptors.
+- **Credential-bearing + PII sources (paperless above all) → NEVER escalated, not
+  even scrubbed.** Excluded at the source, structured status only.
+
+This materially LOWERS the sanitized-Claude risk (leaked descriptors are inert under
+the access model) and makes the local-24GB-GPU buy look like premature over-insurance
+against a risk the network architecture already largely handles. Revisit the GPU only
+if rung-1 + source-gated Claude proves insufficient in practice.
+
+(Tailscale's OTHER role, unrelated: it's how Jordan reaches HausWatch's dashboard
+securely off-LAN — never expose the observer/UI to the public internet.)
+
+### Refinement: logs rarely contain credentials by design (4 layers of protection)
+
+Jordan's point: well-behaved apps don't log secrets (basic practice) — a normal line
+is `authenticated user X`, not the password. True, and it strengthens the model.
+Caveat: credentials DO leak in specific cases that unluckily correlate with "time to
+grab a log" — crash/stack traces dumping a config object or `Authorization` header,
+debug/verbose modes printing request bodies, `postgres://user:pass@host` connection
+strings at startup, and sloppy community images. So keep the sanitizer as a cheap
+BACKSTOP, don't drop it.
+
+Net: FOUR independent layers protect the sanitized-Claude path —
+  1. logs usually contain no secrets (app design) — the common case
+  2. LAN/Tailscale gating → leaked descriptors are inert
+  3. source exclusion → paperless + credential-heavy sources never escalate
+  4. sanitizer regex → catches the exception (token in a crash dump)
+A credential reaching Claude requires ALL of: app logged it × escalated source ×
+regex missed × mattered-despite-gating. Stacked-unlikely, not a coin flip.
+
+HARD RULE regardless: **never feed env vars / `docker inspect` to the pipe** — that's
+where secrets actually live (HA_TOKEN, BF_APIKEY, ANTHROPIC_KEY), not the logs. The
+observer must only read container LOGS + states, never container ENV.
