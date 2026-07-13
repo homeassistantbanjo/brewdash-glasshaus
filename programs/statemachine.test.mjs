@@ -77,6 +77,11 @@ const cc=PRESETS.coldcrash;
 r=tick(cc,{phaseIndex:0,phaseElapsedHours:0,phaseStartSetpointF:66,currentSetpointF:66,confirmPressed:false});
 ok('cold-crash-only NOT gated (manual = confirmed)', r.awaitingConfirm!==true);
 ok('cold-crash-only steps DOWN immediately at t=0', r.setpointF<66);
+// REGRESSION: a STALE HIGH anchor must NOT make a crash step UP (the 65→70 bug). Even
+// if phaseStartSetpointF leaked in as 75, a crash from a 65°F beer goes DOWN, never up.
+r=tick(cc,{phaseIndex:0,phaseElapsedHours:0.1,phaseStartSetpointF:75,currentSetpointF:65,confirmPressed:false});
+ok('crash with stale-high anchor still steps DOWN (never warms)', r.setpointF<=65);
+ok('crash never commands above current setpoint', r.setpointF<=65);
 // a GENERATED/custom coldCrash phase (requiresConfirm:true) STILL gates
 const genCrash={label:'g',clamp:{minF:32,maxF:88},phases:[{name:'crash',kind:'coldCrash',targetF:38,stepF:2,everyHours:6,requiresConfirm:true,advance:{type:'confirm'}}]};
 r=tick(genCrash,{phaseIndex:0,phaseElapsedHours:0,currentSetpointF:70,confirmPressed:false});

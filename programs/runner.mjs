@@ -93,6 +93,8 @@ async function tickTank(tankId, by) {
   const programKey = s(`input_select.${tankId}_program`);
   if (!usable(programKey) || programKey === 'None') {
     adopted.delete(tankId);                 // no program → reset adopt guard
+    // clear any phase-start anchors so a stale one can't leak into the NEXT program
+    for (const k of phaseStartSetpoints.keys()) if (k.startsWith(`${tankId}:`)) phaseStartSetpoints.delete(k);
     // Publish idle so the status sensor reflects reality. Only write if it isn't
     // ALREADY idle, to avoid bumping last_updated every tick for an idle tank.
     if (s(`sensor.${tankId}_program_status`) !== 'idle') await writeStatus(tankId, idleStatus());
@@ -118,9 +120,27 @@ async function tickTank(tankId, by) {
   // (shouldn't happen — it runs first — but be safe), fall back to a stale/hold state.
   const ci = controlInputs.get(tankId) || { gravityStale: true };
 
+  // phaseStartSetpointF = the setpoint when THIS phase (tank+index) began — the anchor
+  // a ramp/coldCrash steps FROM. It MUST be captured fresh at phase entry and default
+  // to the current setpoint, or a leftover value from a PREVIOUS program leaks in and a
+  // cold crash steps the wrong direction (bug: a stale 75 made a 65→34 crash compute 70
+  // going UP). Keyed by phase so re-entering phase 0 with a new program re-anchors.
+  const psKey = `${tankId}:${phaseIndex}`;
+  if (!phaseStartSetpoints.has(psKey)) {
+    // first tick of this phase → anchor on the current setpoint (or the phase's own
+    // start temp if the controller has no value yet)
+    const program0 = resolveProgram(programKey, by, tankId);
+    const anchor = currentSetpointF ?? program0?.phases?.[phaseIndex]?.tempF ?? null;
+    phaseStartSetpoints.set(psKey, anchor);
+    // drop any OLD phase keys for this tank so the Map can't accumulate stale anchors
+    for (const k of phaseStartSetpoints.keys()) {
+      if (k.startsWith(`${tankId}:`) && k !== psKey) phaseStartSetpoints.delete(k);
+    }
+  }
+
   const state = {
     phaseIndex, phaseElapsedHours, currentSetpointF,
-    phaseStartSetpointF: numOr(phaseStartSetpoints.get(tankId), currentSetpointF),
+    phaseStartSetpointF: numOr(phaseStartSetpoints.get(psKey), currentSetpointF),
     gravityStale: ci.gravityStale, confirmPressed,
     gravity: ci.gravity ?? null,
     expectedFg: ci.expectedFg ?? null,
@@ -180,12 +200,14 @@ async function tickTank(tankId, by) {
   // advance phase
   if (r.advanceTo != null) {
     console.log(`[${tankId}] advance phase ${phaseIndex}→${r.advanceTo}`);
+    // Anchor the NEXT phase on where we ended this one (its ramp/crash steps from here).
+    // Keyed by (tank, next-index); the fresh-phase block above will find it already set.
+    phaseStartSetpoints.set(`${tankId}:${r.advanceTo}`, r.setpointF ?? currentSetpointF);
     if (!DRY_RUN) {
       await callService('input_number', 'set_value',
         { entity_id: `input_number.${tankId}_program_phase`, value: r.advanceTo });
       await callService('input_datetime', 'set_datetime',
         { entity_id: `input_datetime.${tankId}_program_phase_started`, datetime: nowIso() });
-      phaseStartSetpoints.set(tankId, r.setpointF); // remember start for next phase's ramp
     }
     pendingConfirm.delete(tankId); // consumed
   }

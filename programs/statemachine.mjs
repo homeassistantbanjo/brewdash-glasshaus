@@ -110,10 +110,17 @@ function phaseTargetTemp(phase, currentSetpointF, s) {
       const elapsed = s.phaseElapsedHours ?? 0;
       const steps = Math.floor(elapsed / every) + 1; // include an initial step at phase start
       const start = s.phaseStartSetpointF ?? currentSetpointF ?? phase.targetF;
-      const dir = phase.targetF >= start ? 1 : -1;
+      // direction is toward the target FROM THE ANCHOR for a ramp; but a COLD CRASH
+      // must never warm the beer — it always steps DOWN toward its (lower) target, no
+      // matter what the anchor says. This makes the crash robust even if a stale anchor
+      // leaks in (the bug that made a 65→34 crash compute 70 going UP).
+      const dir = phase.kind === 'coldCrash' ? -1 : (phase.targetF >= start ? 1 : -1);
       const stepped = start + dir * step * steps;
       // don't overshoot the target
-      return dir > 0 ? Math.min(stepped, phase.targetF) : Math.max(stepped, phase.targetF);
+      const bounded = dir > 0 ? Math.min(stepped, phase.targetF) : Math.max(stepped, phase.targetF);
+      // extra safety for a crash: never command ABOVE the current setpoint (no warming)
+      if (phase.kind === 'coldCrash' && currentSetpointF != null) return Math.min(bounded, currentSetpointF);
+      return bounded;
     }
     default:
       return currentSetpointF ?? null;
