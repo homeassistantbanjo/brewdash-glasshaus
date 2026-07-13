@@ -187,6 +187,8 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
   const [detail, setDetail] = useState<MetricDetailSpec | null>(null);
   const open = (spec: MetricDetailSpec) => setDetail(spec);
   const b = batch; // shorthand for the specs below (only used when fermenting)
+  // gravity decimal places: 4 for a Tilt Pro (Black/Purple), 3 for standard (display only)
+  const gdp = gravityDp(batch?.tiltColor ?? null);
 
   // header status label: cold-crash / phase / lifecycle status
   // Header status priority: (1) manual Cold Crashing status, (2) an ACTIVE
@@ -246,15 +248,15 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           <>
             {/* left headline: live gravity */}
             <HeadlineStat align="right"
-              value={fmt(batch!.gravity.value, 3)} color={theme.color.cyan}
+              value={fmt(batch!.gravity.value, gdp)} color={theme.color.cyan}
               label={`→ FG ${batch!.expectedFg?.toFixed(3) ?? '—'}`} sub="GRAVITY" big
               onClick={() => open({
-                label: 'Gravity', value: fmt(b!.gravity.value, 3), color: theme.color.cyan,
+                label: 'Gravity', value: fmt(b!.gravity.value, gdp), color: theme.color.cyan,
                 blurb: 'Live specific gravity from the Tilt. Falls from the original gravity (OG) toward the expected final gravity (FG) as yeast ferment sugars. The full fermentation curve below is from Brewfather’s reading history.',
                 series: sgSeries, seriesLabel: 'Gravity curve (full ferment)',
                 reference: b!.expectedFg ?? null, referenceLabel: 'FG', referenceColor: theme.color.amber,
                 facts: [
-                  { k: 'OG', v: b!.og?.toFixed(3) ?? '—' },
+                  { k: 'OG', v: b!.og?.toFixed(gdp) ?? '—' },
                   { k: 'Expected FG', v: b!.expectedFg?.toFixed(3) ?? '—' },
                   { k: 'Velocity', v: velStr(b!.gravityVelocityPerDay) + ' SG/day' },
                   { k: 'ETA to terminal', v: b!.daysToTerminal != null ? b!.daysToTerminal.toFixed(1) + ' d' : '—' },
@@ -442,7 +444,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           {/* VEL moved to the hero collar → freed a slot; OG + FG now shown here
               (were popup-only) so the full OG→now→FG story reads at a glance. */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 5 }}>
-            <TickReadout value={batch!.og ? batch!.og.toFixed(3) : '—'} label="OG" color={theme.color.textLabel} />
+            <TickReadout value={batch!.og ? batch!.og.toFixed(gdp) : '—'} label="OG" color={theme.color.textLabel} />
             {/* attenuation as a segmented BAR gauge — it has a natural 0–100 range */}
             <BarGauge value={fmt(batch!.attenuation, 0)} unit="%" label="Attenuation"
               pct={batch!.attenuation} color={theme.color.blue} glow={active}
@@ -452,7 +454,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                 series: sgSeries, seriesLabel: 'Gravity curve', reference: b!.expectedFg ?? null,
                 referenceLabel: 'FG', referenceColor: theme.color.amber,
                 facts: [
-                  { k: 'OG', v: b!.og?.toFixed(3) ?? '—' },
+                  { k: 'OG', v: b!.og?.toFixed(gdp) ?? '—' },
                   { k: 'ABV so far', v: fmt(b!.abv, 1) + '%' },
                 ],
               })} />
@@ -521,7 +523,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                 blurb: 'How long gravity has held terminal (within ~3 pts of expected FG and flat). Turns green once it has been stable long enough to be confirmed terminal — 3 days normally, ~6 for dry-hopped beers (hop creep can re-ferment). This is the gate before diacetyl rest / cold crash / packaging.',
                 facts: [
                   { k: 'Confirmed terminal?', v: b!.terminalConfirmed ? 'YES' : 'not yet' },
-                  { k: 'Current gravity', v: b!.gravity.value?.toFixed(3) ?? '—' },
+                  { k: 'Current gravity', v: b!.gravity.value?.toFixed(gdp) ?? '—' },
                   { k: 'Expected FG', v: b!.expectedFg?.toFixed(3) ?? '—' },
                 ],
               })} />
@@ -670,6 +672,15 @@ function tempSpec(label: string, value: number | null, color: string, b: ActiveB
 }
 
 function fmt(n: number | null, dp: number): string { return n == null ? '—' : n.toFixed(dp); }
+
+/** Tilt Pro models report 0.0001 SG resolution vs the standard Tilt's 0.001. Show the
+ *  extra decimal for a Pro so you see the precision you paid for. Black + Purple are
+ *  Pros in this brewery; everything else is standard. (Display only — stall/alert
+ *  thresholds are unchanged and still point-based.) */
+const TILT_PRO_COLORS = new Set(['Black', 'Purple']);
+function gravityDp(tiltColor: string | null): number {
+  return tiltColor && TILT_PRO_COLORS.has(tiltColor) ? 4 : 3;
+}
 /** minutes-ago → compact "3m" / "2h" / ">1d". For Tilt reading freshness. */
 function ageStr(min: number | null): string {
   if (min == null) return '—';
