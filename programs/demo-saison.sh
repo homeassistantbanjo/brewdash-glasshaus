@@ -46,11 +46,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# The REAL saison temp arc, with elapsed gates (short) so it flows for the demo.
-# ramp phase = the +2°F/12h free-rise you watch step 68→86. coldCrash phase keeps
-# requiresConfirm (runner forces it) so you SEE it await your confirmation.
+# The REAL saison temp arc, with elapsed gates sized so ALL FIVE phases (incl. the
+# cold crash) fit the demo window. ramp = the free-rise you watch step 68→86 (bigger
+# step so it climbs fast); coldCrash keeps requiresConfirm so you SEE it await confirm.
 echo "== writing SAISON demo plan → sensor.${TANK}_program_plan =="
-PLAN='{"state":"DEMO — French Saison (peppery)","attributes":{"friendly_name":"'"${TANK}"' program plan","tank":"'"${TANK}"'","plan":{"label":"DEMO — French Saison (peppery)","clamp":{"minF":40,"maxF":88},"expectedAtten":80,"phases":[{"name":"Cool Pitch & Early Control","kind":"hold","tempF":68,"advance":{"type":"elapsed","hours":18}},{"name":"Free-Rise to Phenolic Peak","kind":"ramp","tempF":68,"targetF":86,"stepF":2,"everyHours":12,"advance":{"type":"elapsed","hours":84}},{"name":"Hot Diastatic Hold","kind":"hold","tempF":86,"advance":{"type":"elapsed","hours":48}},{"name":"Conditioning Hold","kind":"hold","tempF":72,"advance":{"type":"elapsed","hours":48}},{"name":"Cold Crash","kind":"coldCrash","targetF":38,"stepF":2,"everyHours":6,"requiresConfirm":true,"advance":{"type":"confirm"}}]}}}'
+PLAN='{"state":"DEMO — French Saison (peppery)","attributes":{"friendly_name":"'"${TANK}"' program plan","tank":"'"${TANK}"'","plan":{"label":"DEMO — French Saison (peppery)","clamp":{"minF":40,"maxF":88},"expectedAtten":80,"phases":[{"name":"Cool Pitch & Early Control","kind":"hold","tempF":68,"advance":{"type":"elapsed","hours":10}},{"name":"Free-Rise to Phenolic Peak","kind":"ramp","tempF":68,"targetF":86,"stepF":3,"everyHours":6,"advance":{"type":"elapsed","hours":24}},{"name":"Hot Diastatic Hold","kind":"hold","tempF":86,"advance":{"type":"elapsed","hours":18}},{"name":"Conditioning Hold","kind":"hold","tempF":72,"advance":{"type":"elapsed","hours":18}},{"name":"Cold Crash","kind":"coldCrash","targetF":38,"stepF":2,"everyHours":6,"requiresConfirm":true,"advance":{"type":"confirm"}}]}}}'
 hh -X POST "$HA/api/states/sensor.${TANK}_program_plan" -d "$PLAN" >/dev/null && echo "  plan written"
 
 hh -X POST "$HA/api/services/input_number/set_value" -d "{\"entity_id\":\"input_number.${TANK}_program_phase\",\"value\":0}" >/dev/null
@@ -68,11 +68,24 @@ docker run -d --name "$DEMO_NAME" \
 
 echo
 echo "== LIVE — watch the Tank 2 card. setpoint & phase for ${DURATION}s =="
+echo "   (when Cold Crash awaits confirm, the demo auto-presses the confirm button"
+echo "    after a beat so you see BOTH the gate AND the crash executing)"
 END=$((SECONDS + DURATION))
 LAST=""
+CONFIRMED=0
 while [ $SECONDS -lt $END ]; do
-  LINE=$(hh "$HA/api/states/sensor.${TANK}_program_status" | node -e 'let r="";process.stdin.on("data",d=>r+=d).on("end",()=>{try{const j=JSON.parse(r);const a=j.attributes||{};console.log(`phase ${a.phaseIndex} · ${a.phase} · setpoint ${a.setpointF}F · ${a.awaitingConfirm?"AWAITING CONFIRM":(a.done?"DONE":a.note||"")}`)}catch(e){console.log("(no status yet)")}})')
+  STAT=$(hh "$HA/api/states/sensor.${TANK}_program_status")
+  LINE=$(echo "$STAT" | node -e 'let r="";process.stdin.on("data",d=>r+=d).on("end",()=>{try{const j=JSON.parse(r);const a=j.attributes||{};console.log(`phase ${a.phaseIndex} · ${a.phase} · setpoint ${a.setpointF}F · ${a.awaitingConfirm?"AWAITING CONFIRM":(a.done?"DONE":a.note||"")}`)}catch(e){console.log("(no status yet)")}})')
   if [ "$LINE" != "$LAST" ]; then echo "  [$(date +%H:%M:%S)] $LINE"; LAST="$LINE"; fi
+  # auto-confirm the cold crash once, after letting the gate show for a couple ticks
+  AWAIT=$(echo "$STAT" | node -e 'let r="";process.stdin.on("data",d=>r+=d).on("end",()=>{try{console.log(JSON.parse(r).attributes.awaitingConfirm===true?"yes":"no")}catch(e){console.log("no")}})')
+  if [ "$AWAIT" = "yes" ] && [ "$CONFIRMED" = "0" ]; then
+    echo "  [$(date +%H:%M:%S)] → gate reached; waiting 6s then pressing confirm_crash…"
+    sleep 6
+    hh -X POST "$HA/api/services/input_button/press" -d "{\"entity_id\":\"input_button.${TANK}_confirm_crash\"}" >/dev/null
+    CONFIRMED=1
+    echo "  [$(date +%H:%M:%S)] → confirm pressed; crash should now proceed toward 38°F"
+  fi
   sleep 2
 done
 echo "== window elapsed =="

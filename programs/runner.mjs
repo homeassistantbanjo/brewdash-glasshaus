@@ -234,6 +234,25 @@ function parsePlan(raw) {
     ? { minF: p.clamp.minF, maxF: p.clamp.maxF }
     : { minF: 32, maxF: 75 }; // safe default if the plan omitted/mangled the clamp
   const KINDS = ['hold', 'ramp', 'wait', 'coldCrash'];
+  // Defensive duration caps — a generated/custom plan must NOT be able to hold a tank
+  // at a temp for absurd lengths (an LLM plan once specified a 500-hour cold hold).
+  // A real conditioning hold is days; a cold crash is 2-5 days. Cap elapsed-gated
+  // holds at 14 days and any explicit `hours`/crash window at ~5 days. This bounds the
+  // damage from a bad plan regardless of what the model emitted.
+  const MAX_HOLD_H = 14 * 24;   // 336h — a long-but-real conditioning hold
+  const MAX_CRASH_H = 5 * 24;   // 120h — the longest a cold crash should ever take
+  const capHours = (h, kind) => {
+    if (!Number.isFinite(h)) return undefined;
+    const cap = kind === 'coldCrash' ? MAX_CRASH_H : MAX_HOLD_H;
+    return Math.min(h, cap);
+  };
+  const capAdvance = (adv, kind) => {
+    if (!adv || typeof adv !== 'object') return adv || undefined;
+    if (adv.type === 'elapsed' && Number.isFinite(adv.hours)) {
+      return { ...adv, hours: capHours(adv.hours, kind) };
+    }
+    return adv;
+  };
   const phases = p.phases.filter((ph) => ph && KINDS.includes(ph.kind)).map((ph) => ({
     name: String(ph.name || ph.kind),
     kind: ph.kind,
@@ -241,8 +260,8 @@ function parsePlan(raw) {
     targetF: Number.isFinite(ph.targetF) ? ph.targetF : undefined,
     stepF: Number.isFinite(ph.stepF) ? ph.stepF : undefined,
     everyHours: Number.isFinite(ph.everyHours) ? ph.everyHours : undefined,
-    hours: Number.isFinite(ph.hours) ? ph.hours : undefined,
-    advance: ph.advance || undefined,
+    hours: capHours(ph.hours, ph.kind),
+    advance: capAdvance(ph.advance, ph.kind),
     // ANY cold-crash phase is force-gated regardless of what the plan said — safety.
     requiresConfirm: ph.kind === 'coldCrash' ? true : !!ph.requiresConfirm,
   }));

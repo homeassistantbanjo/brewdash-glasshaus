@@ -373,6 +373,12 @@ RULES:
   If profile.hotFinish is true, drive the warm free-rise finish described above.
 - End with a conditioning hold, then a cold-crash step. The cold-crash step MUST have
   requiresConfirm:true (the brewer tastes & confirms before crashing — never auto).
+- The cold-crash step RAMPS DOWN to ~34-38°F and is DONE. A real cold crash is 2-5 DAYS, not
+  weeks. Do NOT add a multi-week cold HOLD after the crash — no phase should hold cold for more
+  than ~120 hours. The crash is the final step; conditioning happens WARM before it, not cold
+  after it. (A generated plan once produced a 500-hour cold hold — never do that.)
+- Time-based holds (kind:hold/wait with an elapsed advance) must be realistic: a conditioning hold
+  is typically 3-14 days; never specify hundreds of hours for a single hold.
 - clamp.maxF must ACCOMMODATE the hottest step your plan actually uses (never clamp below a step's
   temp, or the runner will cap it). Set clamp.maxF to the strain profile's true max. For a lager
   keep clamp.maxF <= 70; for a peppery/estery saison this means the mid-to-high 80s°F (up to ~90°F),

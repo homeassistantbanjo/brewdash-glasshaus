@@ -70,11 +70,19 @@ ok('lager advances at 50% atten', r.advanceTo===1);
 r=tick(lm,{phaseIndex:1,phaseElapsedHours:0,phaseStartSetpointF:64,currentSetpointF:64,apparentAttenuationPct:55,gravity:1.025,expectedFg:1.010,gravity24hDeltaPts:-6});
 ok('ramp first step to 69 (5F ok)', r.setpointF===69);
 
+// "Cold crash only" is a MANUAL selection = the decision to crash → NO confirm gate,
+// starts ramping down immediately from the current setpoint. (The confirm gate applies
+// only to a coldCrash the MACHINE auto-reaches inside a multi-phase generated plan.)
 const cc=PRESETS.coldcrash;
-r=tick(cc,{phaseIndex:0,phaseElapsedHours:0,currentSetpointF:66,confirmPressed:false});
-ok('cold crash gated', r.awaitingConfirm===true);
-r=tick(cc,{phaseIndex:0,phaseElapsedHours:0,phaseStartSetpointF:45,currentSetpointF:45,confirmPressed:true});
-ok('cold crash runs after confirm', r.awaitingConfirm!==true && r.setpointF<=45);
+r=tick(cc,{phaseIndex:0,phaseElapsedHours:0,phaseStartSetpointF:66,currentSetpointF:66,confirmPressed:false});
+ok('cold-crash-only NOT gated (manual = confirmed)', r.awaitingConfirm!==true);
+ok('cold-crash-only steps DOWN immediately at t=0', r.setpointF<66);
+// a GENERATED/custom coldCrash phase (requiresConfirm:true) STILL gates
+const genCrash={label:'g',clamp:{minF:32,maxF:88},phases:[{name:'crash',kind:'coldCrash',targetF:38,stepF:2,everyHours:6,requiresConfirm:true,advance:{type:'confirm'}}]};
+r=tick(genCrash,{phaseIndex:0,phaseElapsedHours:0,currentSetpointF:70,confirmPressed:false});
+ok('generated coldCrash STILL gated', r.awaitingConfirm===true);
+r=tick(genCrash,{phaseIndex:0,phaseElapsedHours:0,phaseStartSetpointF:70,currentSetpointF:70,confirmPressed:true});
+ok('generated coldCrash runs after confirm', r.awaitingConfirm!==true && r.setpointF<70);
 
 r=tick(lm,{phaseIndex:0,phaseElapsedHours:20,currentSetpointF:64,apparentAttenuationPct:52,gravityStale:true,gravity:1.028,expectedFg:1.010,gravity24hDeltaPts:-8});
 ok('stale gravity pauses advance', r.paused===true && r.advanceTo===null && r.setpointF===64);

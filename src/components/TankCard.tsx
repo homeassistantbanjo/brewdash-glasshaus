@@ -12,6 +12,7 @@ import { Panel } from './hud/Panel';
 import { BarGauge, TickReadout } from './hud/Gauge';
 import { theme, stateColor, hexA, textGlow, fx } from '../theme/tokens';
 import { ActiveBatch, AlertSeverity, EquipmentPower, Tank, isActiveBrew } from '../types/domain';
+import { useBreweryActions } from '../hooks/useBreweryActions';
 
 /** A vitals pip at a corner of the hero ring "collar": a LEADING label so it's
  *  unambiguous (e.g. "DAY 6.4d"), glowing value, positioned clear of the ring. */
@@ -54,6 +55,22 @@ function useProgramPhase(tankId: string): string | null {
   if (!a || !a.phase || a.phase === 'done') return null;
   // ignore idle/none statuses; only surface an actively-running phase
   if (typeof a.phase === 'string' && a.phase.trim() && a.phase.toLowerCase() !== 'none') return a.phase;
+  return null;
+}
+
+/** Is a running program AWAITING a cold-crash confirmation? The programs engine gates
+ *  an auto-reached cold crash on the brewer's OK (taste-check before crashing). This
+ *  surfaces that on the card so it's impossible to miss — previously the only confirm
+ *  control was buried in the Manage modal, so a gated crash looked like "nothing
+ *  happened / stuck". Returns { phase } when awaiting, else null. Cross-checked against
+ *  the live program selection so a stale status can't raise a phantom prompt. */
+function useAwaitingCrashConfirm(tankId: string): { phase: string } | null {
+  const e = useHaEntity(`sensor.${tankId}_program_status`);
+  const prog = useHaEntity(`input_select.${tankId}_program`);
+  const a = (e?.attributes as any) ?? null;
+  const progState = prog?.state?.toLowerCase();
+  if (!progState || progState === 'none' || progState === 'unknown' || progState === 'unavailable') return null;
+  if (a?.awaitingConfirm === true) return { phase: String(a.phase || 'cold crash') };
   return null;
 }
 
@@ -113,6 +130,11 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
   const crashing = tank.status === 'Cold Crashing';
   // active fermentation-program phase (drives the header when a program runs)
   const programPhase = useProgramPhase(tank.id);
+  // is the program waiting for the brewer to OK an auto-reached cold crash? surfaced
+  // as an unmissable banner on the card (previously only in the Manage modal → looked
+  // like the program was stuck/idle).
+  const awaitingCrash = useAwaitingCrashConfirm(tank.id);
+  const actions = useBreweryActions();
 
   // --- resolve vessel + accent state (color === state) ---
   const dev = batch ? (batch.probeTemp.value ?? 0) - (batch.setpoint.value ?? 0) : 0;
@@ -382,6 +404,33 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           })}
         </div>
       )}
+
+      {/* AWAITING COLD-CRASH CONFIRM — unmissable banner + button, right on the card.
+          The programs engine paused at a cold-crash step for the brewer's OK. Tapping
+          Confirm presses input_button.tank_N_confirm_crash; the runner then starts
+          ramping down on its next tick. (This is the ONLY confirm gate now — a
+          manually-selected "Cold crash only" starts immediately, no gate.) */}
+      {awaitingCrash && (
+        <button
+          onClick={(e) => { e.stopPropagation(); actions.confirmCrash(tank.id); }}
+          style={{
+            margin: '6px 14px 0', padding: '10px 14px', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+            fontFamily: theme.font.mono, fontSize: 12, letterSpacing: 1, fontWeight: 700,
+            color: theme.color.amber, background: hexA(theme.color.amber, 0.12),
+            border: `1px solid ${hexA(theme.color.amber, 0.6)}`, borderRadius: theme.radius.sm,
+            textShadow: textGlow(theme.color.amber, 0.6),
+            animation: fx().animatedGrid ? 'ghpulse 1.6s ease-in-out infinite' : 'none',
+          }}
+        >
+          <span>❄ COLD CRASH READY — {awaitingCrash.phase.toUpperCase()}</span>
+          <span style={{
+            padding: '4px 10px', borderRadius: theme.radius.sm,
+            background: hexA(theme.color.amber, 0.22), border: `1px solid ${hexA(theme.color.amber, 0.7)}`,
+          }}>CONFIRM ▸</span>
+        </button>
+      )}
+      <style>{`@keyframes ghpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.62; } }`}</style>
 
       {fermenting && (
         <div style={{

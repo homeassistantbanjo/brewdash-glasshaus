@@ -54,9 +54,16 @@ export const PRESETS = {
   },
   coldcrash: {
     label: 'Cold crash only',
-    clamp: { minF: 32, maxF: 45 },
+    // clamp.maxF must be HIGH enough to START from the beer's current ferment temp,
+    // or the gradual step gets clamped into a single hard jump. minF is the crash floor.
+    clamp: { minF: 32, maxF: 90 },
     phases: [
-      { name: 'crash', kind: 'coldCrash', targetF: 34, stepF: 6, everyHours: 12, requiresConfirm: true },
+      // MANUALLY selecting "Cold crash only" IS the decision to crash — no separate
+      // confirm gate (that gate is for a crash the MACHINE auto-reaches at the end of a
+      // multi-phase ferment, where it should pause for a taste-check). Start ramping
+      // down immediately from wherever the setpoint is. 5°F every 3h → 34°F is a
+      // controlled but prompt descent (from ~68°F that's ~20h to crash temp).
+      { name: 'crash', kind: 'coldCrash', targetF: 34, stepF: 5, everyHours: 3, requiresConfirm: false },
     ],
   },
 };
