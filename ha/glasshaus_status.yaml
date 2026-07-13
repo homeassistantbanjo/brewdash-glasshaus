@@ -35,7 +35,8 @@ input_select:
   tank_1_tilt: &tilt_opts
     name: Tank 1 Tilt
     icon: mdi:thermometer
-    options: ["None", "Black", "Red", "Blue"]
+    # Colors the app knows (src ALL_TILT_COLORS). Purple = the new Tilt Pro.
+    options: ["None", "Black", "Red", "Blue", "Purple", "Green", "Orange", "Yellow", "Pink"]
   tank_2_tilt:
     <<: *tilt_opts
     name: Tank 2 Tilt
