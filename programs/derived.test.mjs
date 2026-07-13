@@ -138,5 +138,36 @@ r = computeDerived({ gravity:null, og:1.050, expectedFg:1.010, gravity24hDeltaPt
   gravity8hMaxSg:null, gravityAgeMin:null }, NOW);
 ok('null gravity → not suspect (missing, not wrong)', r.gravitySuspect===false);
 
+// TEMP EXCURSION SUPPRESSION — the beer can't track a stepped setpoint instantly, so
+// a divergence right after a setpoint change is convergence, not a fault.
+// probe 12°F off setpoint but setpoint JUST changed (5 min ago) → NO excursion alert
+r = computeDerived({ gravity:1.040, og:1.070, expectedFg:1.014, beerTempF:78, probeTempF:78,
+  setpointF:66, gravity24hDeltaPts:-18, gravity8hMaxSg:1.045, gravityAgeMin:0,
+  setpointChangedMinAgo:5 }, NOW);
+ok('excursion SUPPRESSED within settle window (setpoint changed 5min ago)',
+   !r.alerts.some(a=>a.key==='temp_excursion'));
+// same divergence but setpoint changed 3h ago (past the 2h settle) → excursion FIRES
+r = computeDerived({ gravity:1.040, og:1.070, expectedFg:1.014, beerTempF:78, probeTempF:78,
+  setpointF:66, gravity24hDeltaPts:-18, gravity8hMaxSg:1.045, gravityAgeMin:0,
+  setpointChangedMinAgo:180 }, NOW);
+ok('excursion FIRES once settled (setpoint changed 3h ago)',
+   r.alerts.some(a=>a.key==='temp_excursion'));
+// no setpointChangedMinAgo provided → behaves as before (fires) — backward compatible
+r = computeDerived({ gravity:1.040, og:1.070, expectedFg:1.014, beerTempF:78, probeTempF:78,
+  setpointF:66, gravity24hDeltaPts:-18, gravity8hMaxSg:1.045, gravityAgeMin:0 }, NOW);
+ok('excursion still fires when no setpoint-age given (back-compat)',
+   r.alerts.some(a=>a.key==='temp_excursion'));
+
+// CRASH SUPPRESSION — cold halts fermentation on purpose; flat+above-FG is expected.
+// flat + well above FG (would normally STALL) but inCrash → NO stall, projected='crashing'
+r = computeDerived({ gravity:1.030, og:1.058, expectedFg:1.010, beerTempF:40, probeTempF:40,
+  setpointF:40, gravity24hDeltaPts:-0.4, gravity8hMaxSg:1.031, gravityAgeMin:1, inCrash:true }, NOW);
+ok('stall SUPPRESSED during cold crash', !r.alerts.some(a=>a.key==='stalled'));
+ok('projectedFgReach = "crashing" during crash (not "stalled")', r.projectedFgReach==='crashing');
+// same flat+above-FG NOT in crash → stall still fires (unchanged)
+r = computeDerived({ gravity:1.030, og:1.058, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:-0.4, gravity8hMaxSg:1.031, gravityAgeMin:1 }, NOW);
+ok('stall still fires when NOT crashing', r.alerts.some(a=>a.key==='stalled'));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

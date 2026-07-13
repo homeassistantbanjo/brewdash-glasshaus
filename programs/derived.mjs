@@ -21,6 +21,10 @@ const STALL_FLAT_PTS = 1.0;          // |24h delta| < 1 pt = flat
 const STALL_ABOVE_FG_SG = 0.003;     // still >3pts above FG = not terminal
 const NEAR_TERMINAL_SG = 0.003;      // within 3pts of FG = approaching terminal
 const EXCURSION_F = 2.0;             // probe >2°F off setpoint
+const EXCURSION_SETTLE_MIN = 120;    // grace after a SETPOINT CHANGE before excursion can fire —
+                                     // the beer physically can't track a stepped setpoint instantly
+                                     // (a crash step or free-rise takes hours), so don't cry
+                                     // "excursion" while it's still converging. 2h normalization.
 const SUSPECT_DELTA_F = 5.0;         // |tilt-probe| >5°F = wrong Tilt likely
 const SIGNAL_LOST_MIN = 15;          // no Tilt reading in 15 min
 
@@ -69,7 +73,12 @@ export function computeDerived(t, now = 0) {
     && (gravity < 0.995 || (attenuationPct != null && attenuationPct > 100.5));
   const progressToFgPct = calcProgress(og, gravity, fg);
   const daysToTerminal = calcDaysToTerminal(gravity, fg, velSg);
-  const projectedFgReach = projectedFgDate(gravity, fg, velSg, now);
+  // During a cold crash, fermentation is intentionally halted → velocity ~0 → the
+  // projection would read "stalled", which is misleading (it's crashing, not stuck).
+  // Report 'crashing' instead so the UI shows the real situation, not a false stall.
+  const projectedFgReach = (t.inCrash === true)
+    ? 'crashing'
+    : projectedFgDate(gravity, fg, velSg, now);
 
   // Pace vs schedule: days ahead(+)/behind(-) the planned ferment window, by
   // attenuation progress vs elapsed fraction. Mirrors the old YAML gh_ferment_pace.
@@ -131,13 +140,24 @@ export function computeDerived(t, now = 0) {
   const hasBatch = og != null;
   const alerts = [];
   const dev = (n(t.probeTempF) != null && n(t.setpointF) != null) ? t.probeTempF - t.setpointF : null;
+  // Is the program actively DRIVING the temp toward a new target? During a cold crash
+  // (or any ramp step) the beer intentionally lags the setpoint for hours, and a crash
+  // deliberately halts fermentation — so the "stalled"/"excursion" heuristics would
+  // false-fire. `inCrash` (cold-crash phase) and `setpointChangedMinAgo` (how long since
+  // the setpoint last stepped) let us hold those alerts until things normalize.
+  const inCrash = t.inCrash === true;
+  const setpointSettling = n(t.setpointChangedMinAgo) != null && t.setpointChangedMinAgo < EXCURSION_SETTLE_MIN;
   const flat = delta != null && Math.abs(delta) < STALL_FLAT_PTS;
   const aboveFg = (gravity != null && fg != null) && (gravity - fg) > STALL_ABOVE_FG_SG;
-  if (hasBatch && flat && aboveFg)
+  // STALLED: a beer that's flat + still well above FG is a real problem — UNLESS it's
+  // being cold-crashed (cold stops fermentation ON PURPOSE, so flat-above-FG is expected).
+  if (hasBatch && flat && aboveFg && !inCrash)
     alerts.push({ key: 'stalled', severity: 'problem', label: 'STALLED' });
-  // temp excursion is NOT gravity-based — a controller running off setpoint matters
-  // even on a tank with no batch assigned, so this one is not gated on hasBatch.
-  if (dev != null && Math.abs(dev) > EXCURSION_F)
+  // TEMP EXCURSION: probe off setpoint. NOT gravity-based (matters even with no batch),
+  // but suppressed for EXCURSION_SETTLE_MIN after the setpoint last changed — the beer
+  // can't teleport to a new target, so a divergence right after a crash/ramp step is
+  // expected convergence, not a fault. Only fires once the temp has had time to catch up.
+  if (dev != null && Math.abs(dev) > EXCURSION_F && !setpointSettling)
     alerts.push({ key: 'temp_excursion', severity: 'problem', label: 'TEMP EXCURSION' });
   if (hasBatch && tiltProbeDeltaF != null && Math.abs(tiltProbeDeltaF) > SUSPECT_DELTA_F)
     alerts.push({ key: 'assignment_suspect', severity: 'problem', label: 'ASSIGNMENT SUSPECT' });

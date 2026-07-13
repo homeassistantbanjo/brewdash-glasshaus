@@ -448,6 +448,18 @@ async function deriveTank(tankId, by) {
   // (facts is fetched once, earlier, right after batch resolution.)
   const dryHopped = !!facts?.dryHop;
 
+  // Signals that suppress false "temp excursion"/"stalled" alerts while the program is
+  // actively driving the temp (see computeDerived): (1) how long since the setpoint
+  // last CHANGED — the beer can't track a stepped setpoint instantly; (2) whether the
+  // current program phase is a cold crash — cold halts fermentation on purpose.
+  const spEnt = by[`number.${tankId}_setpoint_raw`] || by[`sensor.${tankId}_setpoint`];
+  const spChangedIso = spEnt?.last_changed || spEnt?.last_updated;
+  const setpointChangedMinAgo = spChangedIso ? (Date.now() - Date.parse(spChangedIso)) / 60000 : null;
+  const progKey = by[`input_select.${tankId}_program`]?.state;
+  const prog = (progKey && progKey !== 'None') ? resolveProgram(progKey, by, tankId) : null;
+  const phIdx = numOr(s(`input_number.${tankId}_program_phase`), 0);
+  const inCrash = prog?.phases?.[phIdx]?.kind === 'coldCrash';
+
   const d = computeDerived({
     gravity, og,
     expectedFg: num(s(`input_number.${tankId}_expected_fg`)),
@@ -462,6 +474,8 @@ async function deriveTank(tankId, by) {
     stableSinceMs: st.stableSinceMs,
     dryHopped,
     conditionDays: facts?.conditionDays ?? null,
+    setpointChangedMinAgo,
+    inCrash,
   }, Date.now());
 
   // A physically implausible gravity (computeDerived's gravitySuspect: SG below

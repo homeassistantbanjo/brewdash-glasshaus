@@ -504,7 +504,7 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
                 color: paceColor(b!.paceVsSchedule),
                 blurb: 'How many days ahead (+) or behind (−) the Brewfather fermentation schedule this batch is, by attenuation progress. Positive = attenuating faster than planned.',
                 facts: [
-                  { k: 'Projected FG date', v: b!.projectedFgReach ?? '—' },
+                  { k: 'Projected FG date', v: fgEtaLabel(b!.projectedFgReach) ?? '—' },
                   { k: 'Days fermenting', v: b!.daysFermenting?.toFixed(1) ?? '—' },
                 ],
               })} />
@@ -689,13 +689,20 @@ function tempInBandPct(b: ActiveBatch): number | null {
   return Math.max(0, Math.min(100, 100 - (dev / 5) * 100));
 }
 
+/** Human label for the projected-FG state (single source of truth for both the header
+ *  and the metric-detail popup, so neither shows a raw internal string like 'stalled').*/
+function fgEtaLabel(v: string | null): string | null {
+  if (!v) return null;
+  if (v === 'reached') return 'DONE';
+  if (v === 'crashing') return 'crashing';   // cold crash — not a stall
+  if (v === 'stalled') return '—';           // never surface the raw internal token
+  return v;                                  // e.g. 'Jul 8'
+}
+
 /** Prefer HA's projected calendar date; fall back to in-app days-to-terminal. */
 function fgEtaValue(b: ActiveBatch): string {
-  if (b.projectedFgReach) {
-    if (b.projectedFgReach === 'reached') return 'DONE';
-    if (b.projectedFgReach === 'stalled') return '—';
-    return b.projectedFgReach;                       // e.g. 'Jul 8'
-  }
+  const lbl = fgEtaLabel(b.projectedFgReach);
+  if (lbl != null) return lbl;
   return b.daysToTerminal != null ? b.daysToTerminal.toFixed(1) + 'd' : '—';
 }
 /** Pace vs schedule: +ahead / -behind, in days. */
