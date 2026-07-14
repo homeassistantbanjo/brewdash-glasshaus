@@ -54,10 +54,16 @@ export async function batchStats(batchNo, { sourceTank = null } = {}) {
     style: detail.style || recipe?.style?.name || recipe?.style || null,
     srm: num(detail.srm) ?? num(recipe?.color),
     ibu: num(detail.ibu) ?? num(recipe?.ibu),
-    abv: num(detail.estAbv) ?? num(recipe?.abv),
-    // live Tilt → measured → estimated. Live is the actual current gravity the system reads.
+    // MEASURED first, estimate only as a last resort — the taplist should show what the
+    // beer ACTUALLY hit, not the recipe target. (detail.og / detail.estAbv carry an
+    // estimate-fallback, so they must come AFTER the explicit measured value.)
+    og: num(detail.measured?.og) ?? num(detail.og) ?? num(recipe?.og),
     fg: liveFg ?? num(detail.measured?.fg) ?? num(detail.estFg) ?? num(recipe?.fg),
-    og: num(detail.og) ?? num(recipe?.og),
+    // ABV: prefer the value computed from MEASURED og/fg; then BF's measured abv; then est.
+    abv: num(detail.measured?.abv)
+      ?? ((num(detail.measured?.og) != null && num(detail.measured?.fg) != null)
+        ? +(((detail.measured.og - detail.measured.fg) * 131.25).toFixed(2)) : null)
+      ?? num(detail.estAbv) ?? num(recipe?.abv),
   };
 }
 

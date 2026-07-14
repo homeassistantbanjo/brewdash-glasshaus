@@ -267,6 +267,7 @@ async function bfGetBatch(batchIdOrNo) {
       postBoilGravity: b.measuredPostBoilGravity ?? null,
       og: b.measuredOg ?? null,
       fg: b.measuredFg ?? null,
+      abv: b.measuredAbv ?? null,
       mashPh: b.measuredMashPh ?? null,
       boilSizeGal: Lto(b.measuredBoilSize),
       batchSizeGal: Lto(b.measuredBatchSize),
