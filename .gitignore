@@ -32,3 +32,10 @@ lb.json
 tsconfig.tsbuildinfo
 .m*.json
 .newrecipe.json
+
+# keg service runtime artifacts (SQLite store, build-generated QR svgs, scratch scripts)
+*.db
+*.db-wal
+*.db-shm
+kegs/qr-svg/
+_tmp_*

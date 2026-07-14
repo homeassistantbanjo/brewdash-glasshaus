@@ -1,0 +1,11 @@
+{
+  "name": "glasshaus-kegs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GlassHaus keg-management service — the keg fleet registry (identity, status, per-seal-type o-ring life, cleaning, current beer) with an append-only activity log, QR scan-to-log pages, and an HA sensor mirror. Zero deps, node:sqlite on /data.",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  }
+}
