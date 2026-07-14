@@ -253,15 +253,19 @@ function srmToHex(srm) {
   const c = lo[1].map((v, i) => Math.round(v + (hi[1][i] - v) * t));
   return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 }
-// a little beer glass SVG filled to the SRM color (with a foam head + subtle shading)
-function beerGlass(srm) {
+// a little beer glass SVG filled to the SRM color (with a foam head + subtle shading).
+// `uid` MUST be unique per glass — the gradient id is document-global, so a shared id makes
+// every glass render with the FIRST gradient's color (why a pale beer looked dark next to a
+// dark one). Caller passes the tap number / keg id as the uid.
+function beerGlass(srm, uid = '0') {
   const fill = srmToHex(srm) || '#caa35a';   // sensible default amber if unknown
+  const gid = `g${String(uid).replace(/[^a-z0-9]/gi, '')}`;
   return `<svg class="glass" viewBox="0 0 40 64" aria-hidden="true">
-    <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0" stop-color="${fill}" stop-opacity="0.75"/><stop offset="0.5" stop-color="${fill}"/><stop offset="1" stop-color="${fill}" stop-opacity="0.7"/>
     </linearGradient></defs>
     <path d="M6 6 h28 l-3 52 a3 3 0 0 1 -3 3 h-16 a3 3 0 0 1 -3 -3 z" fill="#0e141b" stroke="#ffffff22"/>
-    <path d="M8 14 h24 l-2.6 44 a2 2 0 0 1 -2 2 h-14.8 a2 2 0 0 1 -2 -2 z" fill="url(#g)"/>
+    <path d="M8 14 h24 l-2.6 44 a2 2 0 0 1 -2 2 h-14.8 a2 2 0 0 1 -2 -2 z" fill="url(#${gid})"/>
     <ellipse cx="20" cy="10" rx="14" ry="5" fill="#fdf6ec"/><ellipse cx="20" cy="9" rx="14" ry="4.4" fill="#fffdf8"/>
   </svg>`;
 }
@@ -271,7 +275,7 @@ function taplistHtml(tapped, soon) {
   const onTap = tapped.length ? tapped.sort((a, b) => (a.tap ?? 99) - (b.tap ?? 99)).map((k) => `
     <div class="tap">
       <div class="tapno">${k.tap ?? '—'}</div>
-      ${beerGlass(k.beer_srm)}
+      ${beerGlass(k.beer_srm, `t${k.tap ?? k.id}`)}
       <div class="beer">
         <div class="bname">${esc(k.beer_batch || k.label)}</div>
         <div class="bstyle">${esc(k.beer_style || '')}</div>
