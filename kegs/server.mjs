@@ -11,6 +11,7 @@ import * as db from './db.mjs';
 import * as K from './kegs.mjs';
 import { kegUrl, kegQrSvg } from './qr.mjs';
 import { pushAll } from './ha.mjs';
+import { comingSoon } from './comingsoon.mjs';
 
 const PORT = Number(process.env.PORT || 8097);
 const BASE_URL = (process.env.BASE_URL || 'https://unraid.tail229434.ts.net').replace(/\/$/, '');
@@ -227,6 +228,61 @@ function kegPageHtml(keg) {
 </script></body></html>`;
 }
 
+// ── TAPLIST — the public bar-top DISPLAY (distinct from the mgmt board + QR page).
+// Glanceable, non-touch, auto-refreshing. Shows what's ON TAP now (tapped kegs) + a
+// "Coming Soon" panel (fermenting/conditioning batches: name · style · FG · ETA). Big
+// type, dark, no controls. The Pi 5 kiosk points Chromium fullscreen at /taplist. ──
+function taplistHtml(tapped, soon) {
+  const abv = (v) => (v != null ? `${Number(v).toFixed(1)}%` : '');
+  const onTap = tapped.length ? tapped.sort((a, b) => (a.tap ?? 99) - (b.tap ?? 99)).map((k) => `
+    <div class="tap">
+      <div class="tapno">${k.tap ?? '—'}</div>
+      <div class="beer">
+        <div class="bname">${esc(k.beer_batch || k.label)}</div>
+        <div class="bmeta">${[esc(k.beer_style || ''), abv(k.beer_abv)].filter(Boolean).join(' · ')}</div>
+      </div>
+    </div>`).join('') : `<div class="empty">No kegs on tap</div>`;
+  const soonRows = soon.length ? soon.map((b) => `
+    <div class="soon-item">
+      <span class="sname">${esc(b.name)}</span>
+      <span class="smeta">${[esc(b.style || ''), b.fg != null ? `FG ${b.fg.toFixed(3)}` : '',
+        b.etaDays != null ? `~${b.etaDays}d` : ''].filter(Boolean).join(' · ')}</span>
+    </div>`).join('') : '';
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>On Tap · GlassHaus</title>
+<style>
+  :root{color-scheme:dark}
+  *{box-sizing:border-box} html,body{height:100%}
+  body{margin:0;font-family:'Inter',system-ui,sans-serif;background:radial-gradient(1200px 700px at 50% -15%, #12233a, #06090d 70%);color:#f2f6fb;
+    display:flex;flex-direction:column;padding:3vh 4vw;overflow:hidden}
+  header{display:flex;align-items:baseline;gap:16px;margin-bottom:2.5vh}
+  header h1{font-size:5vh;margin:0;font-weight:800;letter-spacing:1px}
+  header .brand{font-size:2vh;color:#5fa9c9;text-transform:uppercase;letter-spacing:3px}
+  .taps{flex:1;display:grid;grid-template-columns:repeat(2,1fr);gap:1.6vh 4vw;align-content:start}
+  .tap{display:flex;align-items:center;gap:2.5vw;padding:1.4vh 0;border-bottom:1px solid #ffffff14}
+  .tapno{font-family:'JetBrains Mono',monospace;font-size:6vh;font-weight:700;color:#4fd1e8;min-width:1.4em;text-align:center;
+    text-shadow:0 0 24px #4fd1e880;line-height:1}
+  .bname{font-size:3.6vh;font-weight:700;line-height:1.05}
+  .bmeta{font-size:2.2vh;color:#9fb2c4;margin-top:.4vh}
+  .empty{font-size:4vh;color:#5a6b7d;grid-column:1/-1;text-align:center;padding-top:8vh}
+  .soon{margin-top:2vh;padding-top:2vh;border-top:2px solid #ffffff1a}
+  .soon h2{font-size:2.2vh;color:#f5a623;text-transform:uppercase;letter-spacing:2px;margin:0 0 1vh}
+  .soon-item{display:flex;justify-content:space-between;font-size:2.6vh;padding:.6vh 0}
+  .sname{font-weight:600} .smeta{color:#9fb2c4;font-size:2.2vh}
+  footer{margin-top:2vh;font-family:'JetBrains Mono',monospace;font-size:1.5vh;color:#3a4a58;text-align:right}
+</style></head><body>
+  <header><h1>On Tap</h1><span class="brand">Iconoclast Brewing</span></header>
+  <div class="taps">${onTap}</div>
+  ${soon.length ? `<div class="soon"><h2>Coming Soon</h2>${soonRows}</div>` : ''}
+  <footer>updated <span id="t"></span></footer>
+<script>
+  document.getElementById('t').textContent = new Date().toLocaleTimeString();
+  // non-touch display: just refresh periodically so it stays current with no interaction.
+  setTimeout(() => location.reload(), 60000);
+</script></body></html>`;
+}
+
 // ── router ──
 const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, CORS).end(); return; }
@@ -317,6 +373,13 @@ const server = createServer(async (req, res) => {
 </style>
 <div class="bar"><b>${kegs.length} keg labels</b><button onclick="window.print()">🖨 Print</button></div>
 <div class="grid">${cells.join('')}</div>`);
+  }
+
+  // ── the public taplist display (Pi 5 kiosk points here) ──
+  if (p === '/taplist') {
+    const tapped = db.listKegs().filter((k) => k.status === 'tapped');
+    let soon = []; try { soon = await comingSoon(); } catch { soon = []; }  // never break the board
+    return html(res, 200, taplistHtml(tapped, soon));
   }
 
   return json(res, 404, { error: 'not found' });

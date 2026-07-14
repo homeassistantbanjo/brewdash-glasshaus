@@ -21,7 +21,11 @@ RUN BASE_URL=$BASE_URL COUNT=$KEG_COUNT node gen-qr.mjs
 # ── runtime: zero-dep service ──
 FROM node:22-alpine
 WORKDIR /app
-COPY package.json server.mjs db.mjs kegs.mjs qr.mjs ha.mjs ./
+# copy package.json + ALL runtime .mjs (test files are excluded by .dockerignore, and a
+# glob avoids the "added a module, forgot to list it → crash-loop" trap).
+COPY package.json ./
+COPY *.mjs ./
+RUN rm -f gen-qr.mjs        # build-only tool (runs in the qrgen stage); not needed at runtime
 COPY --from=qrgen /gen/qr-svg ./qr-svg
 EXPOSE 8097
 CMD ["node", "server.mjs"]

@@ -1,0 +1,9 @@
+# keep the runtime image lean. NOTE: gen-qr.mjs is NOT excluded here — the qrgen BUILD
+# stage needs it in the context; the runtime stage deletes it after the glob copy.
+node_modules
+*.test.mjs
+_tmp_*
+*.db
+*.db-wal
+*.db-shm
+qr-svg
