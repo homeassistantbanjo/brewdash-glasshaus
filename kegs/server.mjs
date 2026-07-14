@@ -65,9 +65,20 @@ async function doKegAction(id, action, params = {}) {
       const { patch, event } = K.applyTransition(keg, 'clean', { at, cleanType: params.cleanType });
       db.patchKeg(id, patch, at); db.addEvent(id, event);
     } else if (['dirty', 'empty', 'retired', 'clean', 'filled', 'tapped'].includes(action) && action !== 'clean') {
+      const priorTap = keg.tap;   // if this keg was on a tap, it may be coming OFF it
       const { patch, event } = K.applyTransition(keg, action, { at, tap: params.tap != null ? Number(params.tap) : undefined,
         beer: params.beer, cleanType: params.cleanType });
       db.patchKeg(id, patch, at); db.addEvent(id, event);
+      // If the keg left a tap (new status is not 'tapped' and it had a tap), CLEAR that
+      // tap's current_keg so the tap-line UI stops showing a beer that isn't connected.
+      if (priorTap && patch.status !== 'tapped') {
+        const tl = db.getTap(priorTap);
+        if (tl && tl.current_keg === id) {
+          db.patchTap(priorTap, { current_keg: null }, at);
+          db.addTapEvent(priorTap, { action: 'keg-disconnected', at, detail: { keg: id } });
+          await mirrorTap(priorTap);
+        }
+      }
     } else if (action === 'seal') {
       const { patch, event } = K.replaceSeal(keg, params.sealType, { at });
       db.patchKeg(id, patch, at); db.addEvent(id, event);
@@ -113,13 +124,28 @@ function kegPageHtml(keg) {
   const h = K.kegHealth(keg, Date.now());
   const sevColor = { ok: '#3ad29f', warning: '#f5a623', critical: '#ff4d5e' }[h.severity] || '#8b95a1';
   const chip = (label, val, warn) => `<div class="chip${warn ? ' warn' : ''}"><span>${esc(label)}</span><b>${esc(val)}</b></div>`;
-  const btn = (action, label, extra = '') => `<button onclick="act('${action}'${extra})">${esc(label)}</button>`;
+  // Buttons carry their action + optional prompt/select wiring as DATA ATTRIBUTES, not by
+  // splicing strings into an onclick expression (the old approach produced invalid JS and
+  // every input-taking button silently failed). One delegated handler reads the dataset,
+  // gathers params, and POSTs. No eval, no string-built call sites.
+  //   data-action        the keg action
+  //   data-prompt        if set → prompt() with this text; result stored under data-field
+  //   data-prompt-default default value for the prompt
+  //   data-field         param key the prompt/select value lands under
+  //   data-from-select   id of a <select> to read the param value from (for Tap)
+  const btn = (action, label, opts = {}) => {
+    const attrs = [`data-action="${esc(action)}"`, opts.primary ? 'class="primary"' : ''];
+    if (opts.field) attrs.push(`data-field="${esc(opts.field)}"`);
+    if (opts.prompt) attrs.push(`data-prompt="${esc(opts.prompt)}"`, `data-prompt-default="${esc(opts.promptDefault || '')}"`);
+    if (opts.fromSelect) attrs.push(`data-from-select="${esc(opts.fromSelect)}"`);
+    return `<button ${attrs.filter(Boolean).join(' ')}>${esc(label)}</button>`;
+  };
   const sealRow = K.SEAL_TYPES.map((t) => {
     const s = h.seals[t];
     const age = s.ageDays == null ? 'never' : `${s.ageDays}d`;
     const cls = s.due ? 'warn' : s.soon ? 'soon' : '';
     return `<div class="seal ${cls}"><span>${t} o-ring</span><b>${age}${s.due ? ' — DUE' : s.soon ? ' — soon' : ''}</b>
-      <button onclick="act('seal',\`,sealType:'${t}'\`)">replace</button></div>`;
+      <button data-action="seal" data-field="sealType" data-value="${esc(t)}">replace</button></div>`;
   }).join('');
   const events = db.kegEvents(keg.id, 8).map((e) =>
     `<li><span>${esc(e.at.slice(0, 16).replace('T', ' '))}</span> ${esc(e.action)}${e.detail?.batch ? ` · ${esc(e.detail.batch)}` : ''}${e.detail?.sealType ? ` · ${esc(e.detail.sealType)}` : ''}</li>`).join('');
@@ -160,26 +186,43 @@ function kegPageHtml(keg) {
   <h3>Seals</h3>${sealRow}
   <h3>Actions</h3>
   <div class="actions">
-    ${keg.status === 'dirty' ? btn('clean', '✓ Mark cleaned', ",cleanType:prompt('Clean type? (rinse/caustic/acid/full-cip)','caustic')").replace('<button', '<button class="primary"') : ''}
-    ${keg.status === 'clean' ? btn('filled', '🛢 Fill (manual)').replace('<button', '<button class="primary"') : ''}
-    ${keg.status === 'filled' ? `<select id="tapsel">${tapOptions}</select>` + btn('tap', '🍺 Tap it', ",tap:document.getElementById('tapsel').value").replace('<button', '<button class="primary"') : ''}
-    ${keg.status === 'tapped' ? btn('empty', '💧 Mark empty').replace('<button', '<button class="primary"') : ''}
-    ${keg.status === 'empty' ? btn('dirty', '↩ To dirty').replace('<button', '<button class="primary"') : ''}
+    ${keg.status === 'dirty' ? btn('clean', '✓ Mark cleaned', { primary: true, field: 'cleanType', prompt: 'Clean type? (rinse/caustic/acid/full-cip)', promptDefault: 'caustic' }) : ''}
+    ${keg.status === 'clean' ? btn('filled', '🛢 Fill (manual)', { primary: true, field: 'beerName', prompt: 'Beer name?' }) : ''}
+    ${keg.status === 'filled' ? `<select id="tapsel">${tapOptions}</select>` + btn('tap', '🍺 Tap it', { primary: true, field: 'tap', fromSelect: 'tapsel' }) : ''}
+    ${keg.status === 'tapped' ? btn('empty', '💧 Mark empty', { primary: true }) : ''}
+    ${keg.status === 'empty' ? btn('dirty', '↩ To dirty', { primary: true }) : ''}
     ${keg.status !== 'retired' ? btn('retired', '⊘ Retire') : ''}
-    ${btn('note', '📝 Note', ",text:prompt('Note?')")}
+    ${btn('note', '📝 Note', { field: 'text', prompt: 'Note?' })}
   </div>
   <h3>History</h3><ul>${events || '<li>no events yet</li>'}</ul>
   <a class="qr" href="/kegs/${esc(keg.id)}/label" target="_blank">⎙ Print label</a>
   <div id="msg"></div>
 <script>
-  async function act(action, extra){
-    const params = {}; ${''/* extra injects fields like ,tap:.. ,sealType:.. */}
-    try { eval('Object.assign(params'+(arguments[1]||'')+')'); } catch(e){}
-    if (Object.values(params).some(v=>v===null)) return; // cancelled prompt
-    const r = await fetch('/api/keg/${esc(keg.id)}/action', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action,params})});
-    const j = await r.json();
-    const m=document.getElementById('msg'); m.textContent = j.warn ? '⚠ '+j.warn : (j.ok?'✓ done':'✗ '+(j.error||'failed')); m.className='show';
-    setTimeout(()=>location.reload(), j.warn?2200:700);
+  const KEG_ID = ${JSON.stringify(keg.id)};
+  function showMsg(text, hold){ const m=document.getElementById('msg'); m.textContent=text; m.className='show'; return hold; }
+  // one delegated handler for every action button — reads data-* attrs, builds params,
+  // POSTs. No eval, no string-spliced call sites.
+  document.querySelector('.actions').addEventListener('click', onBtn);
+  document.querySelectorAll('.seal button').forEach(b => b.addEventListener('click', onBtn));
+  async function onBtn(ev){
+    const b = ev.target.closest('button'); if(!b || !b.dataset.action) return;
+    const d = b.dataset, params = {};
+    if (d.field){
+      let val;
+      if (d.value !== undefined) val = d.value;                       // fixed value (seal type)
+      else if (d.fromSelect) val = document.getElementById(d.fromSelect).value;
+      else if (d.prompt) { val = prompt(d.prompt, d.promptDefault || ''); if (val === null) return; } // cancelled
+      // map field → the param shape the server expects
+      if (d.field === 'beerName') params.beer = { name: val };
+      else if (d.field === 'tap') params.tap = Number(val);
+      else params[d.field] = val;
+    }
+    const r = await fetch('/api/keg/'+encodeURIComponent(KEG_ID)+'/action',
+      {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:d.action, params})})
+      .then(r=>r.json()).catch(e=>({ok:false,error:e.message}));
+    const hold = r.warn ? 2200 : 700;
+    showMsg(r.warn ? '⚠ '+r.warn : (r.ok ? '✓ done' : '✗ '+(r.error||'failed')), hold);
+    setTimeout(()=>location.reload(), hold);
   }
 </script></body></html>`;
 }
@@ -226,7 +269,55 @@ const server = createServer(async (req, res) => {
     if (!keg) return html(res, 404, `<!doctype html><meta charset=utf-8><body style="font-family:system-ui;background:#0b0d0f;color:#e9edf2;padding:24px"><h1>Unknown keg</h1><p>${esc(m[1])} isn't in the registry.</p>`);
     return html(res, 200, kegPageHtml(keg));
   }
-  if (p === '/kegs' || p === '/') return json(res, 200, { kegs: db.listKegs().map((k) => k.id), hint: 'scan a keg QR or GET /api/kegs' });
+  // ── fleet index — a browsable page (no client app needed): list every keg + a link
+  // to its QR label, so "where do I find the QRs" has one obvious answer even before
+  // the GlassHaus tablet board exists. ──
+  if (p === '/kegs' || p === '/') {
+    const kegs = db.listKegs().map(withHealth);
+    const rows = kegs.map((k) => {
+      const c = { ok: '#3ad29f', warning: '#f5a623', critical: '#ff4d5e' }[k.health.severity] || '#8b95a1';
+      return `<tr onclick="location.href='/kegs/${esc(k.id)}'">
+        <td class="id">${esc(k.id)}</td><td>${esc(k.label)}</td>
+        <td><span class="pill" style="color:${c};border-color:${c}66;background:${c}18">${esc(k.status)}</span></td>
+        <td>${esc(k.beer_batch || '—')}</td><td>${k.tap ? 'Tap ' + k.tap : '—'}</td>
+        <td><a href="/kegs/${esc(k.id)}/label" onclick="event.stopPropagation()">QR ⎙</a></td></tr>`;
+    }).join('');
+    return html(res, 200, `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Kegs · GlassHaus</title>
+<style>
+  body{margin:0;font-family:system-ui,sans-serif;background:#0b0d0f;color:#e9edf2;padding:20px}
+  h1{font-size:20px;margin:0 0 4px} .sub{color:#7d8894;font-size:13px;margin-bottom:16px}
+  a.top{color:#4fd1e8;font-size:13px;text-decoration:none} table{width:100%;border-collapse:collapse;margin-top:10px}
+  th{text-align:left;font-size:11px;color:#7d8894;text-transform:uppercase;letter-spacing:.5px;padding:8px;border-bottom:1px solid #232a31}
+  td{padding:10px 8px;border-bottom:1px solid #161a1f;font-size:14px;cursor:pointer} tr:hover td{background:#141820}
+  td.id{font-family:ui-monospace,monospace;color:#7d8894;font-size:12px} .pill{padding:3px 9px;border-radius:12px;font-size:11px;text-transform:uppercase;border:1px solid;font-weight:700}
+  td a{color:#4fd1e8;text-decoration:none;font-size:12px}
+</style>
+<h1>🛢 Kegs</h1><div class="sub">${kegs.length} kegs · tap a row to open, "QR" to print a label · <a class="top" href="/kegs-print">print ALL labels →</a></div>
+<table><thead><tr><th>id</th><th>label</th><th>status</th><th>beer</th><th>tap</th><th></th></tr></thead><tbody>${rows}</tbody></table>`);
+  }
+
+  // ── print sheet: every keg's QR at once, sized for sticker paper ──
+  if (p === '/kegs-print') {
+    const kegs = db.listKegs();
+    const cells = await Promise.all(kegs.map(async (k) => {
+      let svg = ''; try { svg = await kegQrSvg(k.id); } catch { svg = '<p>missing</p>'; }
+      return `<div class="cell">${svg}<div class="lab">${esc(k.label)}</div><div class="idl">${esc(k.id)}</div></div>`;
+    }));
+    return html(res, 200, `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Print keg labels</title>
+<style>
+  body{font-family:system-ui,sans-serif;background:#fff;color:#111;padding:16px}
+  .bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+  button{padding:8px 16px;border:1px solid #ccc;border-radius:8px;background:#f5f5f5;cursor:pointer;font-size:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:16px}
+  .cell{text-align:center;border:1px dashed #ccc;border-radius:10px;padding:10px;page-break-inside:avoid}
+  .lab{font-weight:700;font-size:14px;margin-top:4px} .idl{font-family:ui-monospace,monospace;font-size:11px;color:#666}
+  @media print{.bar{display:none}}
+</style>
+<div class="bar"><b>${kegs.length} keg labels</b><button onclick="window.print()">🖨 Print</button></div>
+<div class="grid">${cells.join('')}</div>`);
+  }
 
   return json(res, 404, { error: 'not found' });
 });

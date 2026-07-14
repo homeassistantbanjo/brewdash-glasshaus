@@ -45,8 +45,16 @@ export function applyTransition(keg, to, { at, tap, beer, cleanType } = {}) {
   if (to === 'tapped') { patch.tap = tap ?? keg.tap ?? null; action = 'tapped'; detail = { tap: patch.tap }; }
   if (to === 'filled') {
     patch.tap = null; patch.filled_at = at;
-    if (beer) { patch.beer_batch = beer.batch ?? null; patch.beer_style = beer.style ?? null; patch.beer_abv = beer.abv ?? null; }
-    action = 'filled'; detail = { batch: patch.beer_batch, style: patch.beer_style };
+    // Accept EITHER beer.name (manual fill from QR page / tablet) or beer.batch (kegging
+    // handoff sources the Brewfather batch name into .batch). Only overwrite beer fields
+    // when actually given a name — an empty {beer:{}} must NOT null out existing contents.
+    if (beer) {
+      const name = beer.batch ?? beer.name ?? null;
+      if (name != null) patch.beer_batch = name;
+      if (beer.style !== undefined) patch.beer_style = beer.style ?? null;
+      if (beer.abv !== undefined) patch.beer_abv = beer.abv ?? null;
+    }
+    action = 'filled'; detail = { batch: patch.beer_batch ?? keg.beer_batch, style: patch.beer_style ?? keg.beer_style };
   }
   if (to === 'empty') { patch.tap = null; action = 'emptied'; }
   if (to === 'clean') {

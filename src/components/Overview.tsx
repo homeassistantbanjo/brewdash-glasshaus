@@ -7,6 +7,7 @@ import { AlertBar } from './AlertBar';
 import { GraphsView } from './GraphsView';
 import { InsightsView } from './InsightsView';
 import { BrewDayView } from './BrewDayView';
+import { KegsView } from './KegsView';
 import { InsightPanel } from './InsightPanel';
 import { ThemeSwitcher } from './ThemeSwitcher';
 import { theme, stateColor, hexA, useThemeName } from '../theme/tokens';
@@ -25,7 +26,7 @@ export function Overview() {
   // (batch options are no longer synced to an input_select — batch is stored as
   //  free text (batchNo) and the picker builds its list live from Brewfather, so
   //  there's nothing to reconcile and nothing that can reset on reboot.)
-  const [view, setView] = useState<'tanks' | 'graphs' | 'insights' | 'brewday'>('tanks');
+  const [view, setView] = useState<'tanks' | 'graphs' | 'insights' | 'brewday' | 'kegs'>('tanks');
   const [editing, setEditing] = useState<Tank | null>(null);
   // tank id the alert bar asked to highlight (pulses that card briefly)
   const [focusTankId, setFocusTankId] = useState<string | null>(null);
@@ -107,7 +108,7 @@ export function Overview() {
           <InsightPanel insight={insight} />
           {/* view toggle: tank cards ↔ dedicated big-charts view */}
           <div style={{ display: 'flex', gap: 4 }}>
-            {(['tanks', 'graphs', 'insights', 'brewday'] as const).map((v) => (
+            {(['tanks', 'graphs', 'insights', 'brewday', 'kegs'] as const).map((v) => (
               <button key={v} onClick={() => setView(v)} style={{
                 fontFamily: theme.font.mono, fontSize: 10, letterSpacing: 1,
                 textTransform: 'uppercase', padding: '4px 10px', borderRadius: 6,
@@ -115,7 +116,7 @@ export function Overview() {
                 border: `1px solid ${view === v ? theme.color.cyan : theme.color.panelBorder}`,
                 background: view === v ? hexA(theme.color.cyan, 0.15) : theme.color.inset,
                 color: view === v ? theme.color.cyan : theme.color.textDim,
-              }}>{v === 'tanks' ? 'Tanks' : v === 'graphs' ? 'Graphs' : v === 'insights' ? 'Insights' : 'Brew Day'}</button>
+              }}>{v === 'tanks' ? 'Tanks' : v === 'graphs' ? 'Graphs' : v === 'insights' ? 'Insights' : v === 'brewday' ? 'Brew Day' : 'Kegs'}</button>
             ))}
           </div>
           <ThemeSwitcher />
@@ -187,6 +188,8 @@ export function Overview() {
         <InsightsView />
       ) : view === 'brewday' ? (
         <BrewDayView />
+      ) : view === 'kegs' ? (
+        <KegsView />
       ) : (
         /* 3-column card grid — one fermenter per column, stable order, fills the
            remaining vertical space. Single-screen: this flex-1 region is the only

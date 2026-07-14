@@ -17,6 +17,7 @@ interface GlassHausConfig {
   haToken?: string;
   analyzerUrl?: string;
   brewfatherUrl?: string;
+  kegsUrl?: string;
 }
 
 declare global {
@@ -56,3 +57,7 @@ export const ANALYZER_URL =
 // The Brewfather write service container (brew-day measurement write-back), :8093.
 export const BREWFATHER_URL =
   runtime.brewfatherUrl || import.meta.env.VITE_BREWFATHER_URL || 'http://192.168.50.118:8093';
+
+// The keg-management service (fleet registry, tap lines, QR pages), :8097.
+export const KEGS_URL =
+  runtime.kegsUrl || import.meta.env.VITE_KEGS_URL || 'http://192.168.50.118:8097';

@@ -47,6 +47,18 @@ test('applyTransition to tapped records the tap number + logs event', () => {
   assert.equal(event.detail.tap, 2);
 });
 
+test('filled accepts beer.NAME (manual fill from QR/tablet), not just beer.batch', () => {
+  const r = applyTransition(keg({ status: 'clean' }), 'filled', { at: iso(NOW), beer: { name: 'Hazy IPA #12' } });
+  assert.equal(r.patch.beer_batch, 'Hazy IPA #12', 'beer.name maps to beer_batch');
+});
+
+test('filled with empty beer {} does NOT null out existing contents', () => {
+  // regression: an empty beer object must not wipe beer_batch/style/abv
+  const k = keg({ status: 'clean', beer_batch: 'Existing #1', beer_style: 'Stout', beer_abv: 5 });
+  const r = applyTransition(k, 'filled', { at: iso(NOW), beer: {} });
+  assert.equal(r.patch.beer_batch, undefined, 'no name given → beer_batch untouched (not nulled)');
+});
+
 test('applyTransition to filled sets beer + clears tap; to dirty clears contents', () => {
   const filled = applyTransition(keg({ status: 'clean' }), 'filled', { at: iso(NOW), beer: { batch: 'Saison #7', style: 'Saison', abv: 6.1 } });
   assert.equal(filled.patch.beer_batch, 'Saison #7');
