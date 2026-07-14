@@ -53,6 +53,12 @@ export function applyTransition(keg, to, { at, tap, beer, cleanType } = {}) {
       if (name != null) patch.beer_batch = name;
       if (beer.style !== undefined) patch.beer_style = beer.style ?? null;
       if (beer.abv !== undefined) patch.beer_abv = beer.abv ?? null;
+      // graphical stats for the taplist (SRM color / IBU / FG / OG). Auto-filled from
+      // Brewfather at kegging, or entered manually for guest/donation beers.
+      if (beer.srm !== undefined) patch.beer_srm = beer.srm ?? null;
+      if (beer.ibu !== undefined) patch.beer_ibu = beer.ibu ?? null;
+      if (beer.fg !== undefined) patch.beer_fg = beer.fg ?? null;
+      if (beer.og !== undefined) patch.beer_og = beer.og ?? null;
     }
     action = 'filled'; detail = { batch: patch.beer_batch ?? keg.beer_batch, style: patch.beer_style ?? keg.beer_style };
   }
@@ -167,7 +173,9 @@ export function kegBatch(keg, batch, { at, sourceTank = null } = {}) {
   // batch into a keg that's currently tapped/full — block that mistake here.)
   if (keg.status !== 'clean') throw new Error(`can't keg into ${keg.id}: keg is ${keg.status}, must be clean first`);
   const { patch, event } = applyTransition(keg, 'filled', {
-    at, beer: { batch: batch?.name ?? null, style: batch?.style ?? null, abv: batch?.abv ?? null },
+    at, beer: { batch: batch?.name ?? null, style: batch?.style ?? null, abv: batch?.abv ?? null,
+      // graphical stats (from Brewfather via batchStats, or passed manually)
+      srm: batch?.srm ?? null, ibu: batch?.ibu ?? null, fg: batch?.fg ?? null, og: batch?.og ?? null },
   });
   event.detail = { ...event.detail, sourceTank, batch: batch?.name ?? null };
   return { patch, event };

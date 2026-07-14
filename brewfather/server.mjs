@@ -249,6 +249,12 @@ async function bfGetBatch(batchIdOrNo) {
     // conditioning duration inputs + resolved target (see conditioningPlan)
     yeastType: cond.yeastType, style: cond.style,
     conditionDays: cond.conditionDays, conditionSource: cond.source,
+    // recipe SPEC stats for the taplist's graphical display (SRM color / IBU / est ABV /
+    // FG). Brewfather stores color as SRM in `rec.color`; prefer measured where present.
+    srm: n(rec.color) ?? null,
+    ibu: n(rec.ibu) ?? null,
+    estAbv: n(rec.abv) ?? null,
+    estFg: n(rec.fg) ?? null,
     // display fields the app needs to keep showing a batch once it leaves
     // Fermenting (the HA integration drops non-Fermenting batches, so the app
     // falls back to this endpoint). Timestamps as epoch ms; og as SG.

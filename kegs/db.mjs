@@ -35,6 +35,7 @@ function initSchema(d) {
       status        TEXT NOT NULL DEFAULT 'dirty',
       tap           INTEGER,
       beer_batch    TEXT, beer_style TEXT, beer_abv REAL, filled_at TEXT,
+      beer_srm      REAL, beer_ibu REAL, beer_fg REAL, beer_og REAL,
       lid_seal_at   TEXT, lid_seal_life  INTEGER DEFAULT 730,
       post_seal_at  TEXT, post_seal_life INTEGER DEFAULT 365,
       dip_seal_at   TEXT, dip_seal_life  INTEGER DEFAULT 365,
@@ -69,6 +70,16 @@ function initSchema(d) {
     );
     CREATE INDEX IF NOT EXISTS idx_tapevents ON tap_events(tap, at DESC);
   `);
+  // ── migrations: add columns to an ALREADY-EXISTING kegs table (CREATE IF NOT EXISTS
+  // won't). Idempotent — only adds a column when it's missing. SQLite ADD COLUMN is safe
+  // + cheap (no table rewrite). Grow this list as the schema evolves.
+  const have = new Set(d.prepare(`PRAGMA table_info(kegs)`).all().map((c) => c.name));
+  const addCols = [
+    ['beer_srm', 'REAL'], ['beer_ibu', 'REAL'], ['beer_fg', 'REAL'], ['beer_og', 'REAL'],
+  ];
+  for (const [col, type] of addCols) {
+    if (!have.has(col)) d.exec(`ALTER TABLE kegs ADD COLUMN ${col} ${type}`);
+  }
 }
 
 // ── tap lines ──────────────────────────────────────────────────────────────
@@ -104,7 +115,8 @@ export function tapEventsFor(tap, limit = 50) {
 
 // column list for kegs (kept in one place for insert/update)
 const COLS = ['label', 'type', 'size_l', 'purchased_at', 'status', 'tap', 'beer_batch',
-  'beer_style', 'beer_abv', 'filled_at', 'lid_seal_at', 'lid_seal_life', 'post_seal_at',
+  'beer_style', 'beer_abv', 'beer_srm', 'beer_ibu', 'beer_fg', 'beer_og', 'filled_at',
+  'lid_seal_at', 'lid_seal_life', 'post_seal_at',
   'post_seal_life', 'dip_seal_at', 'dip_seal_life', 'cleaned_at', 'clean_type', 'clean_life',
   'retired_at', 'notes'];
 

@@ -11,7 +11,7 @@ import * as db from './db.mjs';
 import * as K from './kegs.mjs';
 import { kegUrl, kegQrSvg } from './qr.mjs';
 import { pushAll } from './ha.mjs';
-import { comingSoon } from './comingsoon.mjs';
+import { comingSoon, batchStats } from './comingsoon.mjs';
 
 const PORT = Number(process.env.PORT || 8097);
 const BASE_URL = (process.env.BASE_URL || 'https://unraid.tail229434.ts.net').replace(/\/$/, '');
@@ -94,7 +94,13 @@ async function doKegAction(id, action, params = {}) {
       await Promise.all([mirrorKeg(id), mirrorTap(tapNo)]);
       return { ok: true, keg: withHealth(db.getKeg(id)), warn };
     } else if (action === 'kegBatch') {
-      const { patch, event } = K.kegBatch(keg, params.batch || {}, { at, sourceTank: params.sourceTank });
+      // auto-enrich from Brewfather (SRM/IBU/FG/OG/style) so the taplist gets the color
+      // glass + chips for free. Manual params.batch fields win (guest beers / overrides).
+      const batch = params.batch || {};
+      const bfNo = batch.batchNo ?? params.batchNo ?? null;
+      const bf = bfNo != null ? await batchStats(bfNo) : {};
+      const merged = { ...bf, ...batch, style: batch.style ?? bf.style };  // manual overrides BF
+      const { patch, event } = K.kegBatch(keg, merged, { at, sourceTank: params.sourceTank });
       db.patchKeg(id, patch, at); db.addEvent(id, event);
     } else if (action === 'note') {
       db.addEvent(id, { action: 'note', at, detail: { text: String(params.text || '') } });
@@ -232,14 +238,49 @@ function kegPageHtml(keg) {
 // Glanceable, non-touch, auto-refreshing. Shows what's ON TAP now (tapped kegs) + a
 // "Coming Soon" panel (fermenting/conditioning batches: name · style · FG · ETA). Big
 // type, dark, no controls. The Pi 5 kiosk points Chromium fullscreen at /taplist. ──
+// SRM (beer color units) → hex, from the standard SRM reference scale (pale straw → jet
+// black). Interpolated between known anchor points so any SRM maps to a plausible color.
+function srmToHex(srm) {
+  if (srm == null || !Number.isFinite(Number(srm))) return null;
+  const s = Math.max(1, Math.min(40, Number(srm)));
+  // anchor table (SRM: [r,g,b]) — abbreviated standard chart
+  const A = [[1, [255, 230, 153]], [3, [255, 202, 90]], [5, [246, 166, 33]], [8, [225, 118, 0]],
+    [12, [190, 82, 0]], [16, [143, 51, 3]], [20, [102, 34, 6]], [26, [67, 22, 8]],
+    [33, [38, 15, 8]], [40, [15, 8, 8]]];
+  let lo = A[0], hi = A[A.length - 1];
+  for (let i = 0; i < A.length - 1; i++) if (s >= A[i][0] && s <= A[i + 1][0]) { lo = A[i]; hi = A[i + 1]; break; }
+  const t = hi[0] === lo[0] ? 0 : (s - lo[0]) / (hi[0] - lo[0]);
+  const c = lo[1].map((v, i) => Math.round(v + (hi[1][i] - v) * t));
+  return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+// a little beer glass SVG filled to the SRM color (with a foam head + subtle shading)
+function beerGlass(srm) {
+  const fill = srmToHex(srm) || '#caa35a';   // sensible default amber if unknown
+  return `<svg class="glass" viewBox="0 0 40 64" aria-hidden="true">
+    <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="${fill}" stop-opacity="0.75"/><stop offset="0.5" stop-color="${fill}"/><stop offset="1" stop-color="${fill}" stop-opacity="0.7"/>
+    </linearGradient></defs>
+    <path d="M6 6 h28 l-3 52 a3 3 0 0 1 -3 3 h-16 a3 3 0 0 1 -3 -3 z" fill="#0e141b" stroke="#ffffff22"/>
+    <path d="M8 14 h24 l-2.6 44 a2 2 0 0 1 -2 2 h-14.8 a2 2 0 0 1 -2 -2 z" fill="url(#g)"/>
+    <ellipse cx="20" cy="10" rx="14" ry="5" fill="#fdf6ec"/><ellipse cx="20" cy="9" rx="14" ry="4.4" fill="#fffdf8"/>
+  </svg>`;
+}
 function taplistHtml(tapped, soon) {
   const abv = (v) => (v != null ? `${Number(v).toFixed(1)}%` : '');
+  const chip = (label, val) => (val ? `<span class="chip"><b>${esc(val)}</b><i>${esc(label)}</i></span>` : '');
   const onTap = tapped.length ? tapped.sort((a, b) => (a.tap ?? 99) - (b.tap ?? 99)).map((k) => `
     <div class="tap">
       <div class="tapno">${k.tap ?? '—'}</div>
+      ${beerGlass(k.beer_srm)}
       <div class="beer">
         <div class="bname">${esc(k.beer_batch || k.label)}</div>
-        <div class="bmeta">${[esc(k.beer_style || ''), abv(k.beer_abv)].filter(Boolean).join(' · ')}</div>
+        <div class="bstyle">${esc(k.beer_style || '')}</div>
+        <div class="chips">
+          ${chip('ABV', abv(k.beer_abv))}
+          ${chip('IBU', k.beer_ibu != null ? Math.round(k.beer_ibu) : '')}
+          ${chip('SRM', k.beer_srm != null ? Math.round(k.beer_srm) : '')}
+          ${chip('FG', k.beer_fg != null ? Number(k.beer_fg).toFixed(3) : '')}
+        </div>
       </div>
     </div>`).join('') : `<div class="empty">No kegs on tap</div>`;
   const soonRows = soon.length ? soon.map((b) => `
@@ -260,11 +301,17 @@ function taplistHtml(tapped, soon) {
   header h1{font-size:5vh;margin:0;font-weight:800;letter-spacing:1px}
   header .brand{font-size:2vh;color:#5fa9c9;text-transform:uppercase;letter-spacing:3px}
   .taps{flex:1;display:grid;grid-template-columns:repeat(2,1fr);gap:1.6vh 4vw;align-content:start}
-  .tap{display:flex;align-items:center;gap:2.5vw;padding:1.4vh 0;border-bottom:1px solid #ffffff14}
-  .tapno{font-family:'JetBrains Mono',monospace;font-size:6vh;font-weight:700;color:#4fd1e8;min-width:1.4em;text-align:center;
+  .tap{display:flex;align-items:center;gap:1.6vw;padding:1.2vh 0;border-bottom:1px solid #ffffff14}
+  .tapno{font-family:'JetBrains Mono',monospace;font-size:6vh;font-weight:700;color:#4fd1e8;min-width:1.3em;text-align:center;
     text-shadow:0 0 24px #4fd1e880;line-height:1}
-  .bname{font-size:3.6vh;font-weight:700;line-height:1.05}
-  .bmeta{font-size:2.2vh;color:#9fb2c4;margin-top:.4vh}
+  .glass{height:9vh;width:auto;flex-shrink:0;filter:drop-shadow(0 3px 8px #0008)}
+  .beer{min-width:0}
+  .bname{font-size:3.4vh;font-weight:800;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bstyle{font-size:2vh;color:#9fb2c4;margin:.3vh 0 .8vh}
+  .chips{display:flex;gap:1vw;flex-wrap:wrap}
+  .chip{display:inline-flex;flex-direction:column;align-items:center;background:#ffffff0e;border:1px solid #ffffff1c;border-radius:1vh;padding:.4vh .9vw;line-height:1.1}
+  .chip b{font-size:2.1vh;font-weight:700;font-variant-numeric:tabular-nums}
+  .chip i{font-size:1.1vh;letter-spacing:1px;color:#7f93a6;text-transform:uppercase;font-style:normal;margin-top:.2vh}
   .empty{font-size:4vh;color:#5a6b7d;grid-column:1/-1;text-align:center;padding-top:8vh}
   .soon{margin-top:2vh;padding-top:2vh;border-top:2px solid #ffffff1a}
   .soon h2{font-size:2.2vh;color:#f5a623;text-transform:uppercase;letter-spacing:2px;margin:0 0 1vh}

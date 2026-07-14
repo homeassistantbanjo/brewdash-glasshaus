@@ -31,6 +31,29 @@ function getJson(url, headers = {}, timeoutMs = 6000) {
 const COMING_STATUSES = /^(fermenting|conditioning)$/i;
 
 /**
+ * Fetch a batch's graphical stats from Brewfather for the taplist: style, SRM (color),
+ * IBU, ABV, FG, OG. Used by the kegging handoff to auto-stamp these onto the keg so the
+ * board can render the SRM color glass + chips. Returns {} on any failure (guest/donation
+ * beers aren't in Brewfather — the caller falls back to manual entry). batchNoOrName can
+ * be a Brewfather batchNo. Never throws.
+ */
+export async function batchStats(batchNo) {
+  if (batchNo == null) return {};
+  const detail = await getJson(`${BREWFATHER_URL}/batch/${encodeURIComponent(batchNo)}`);
+  if (!detail) return {};
+  const recipe = await getJson(`${BREWFATHER_URL}/recipe/${encodeURIComponent(batchNo)}`);
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  return {
+    style: detail.style || recipe?.style?.name || recipe?.style || null,
+    srm: num(detail.srm) ?? num(recipe?.color),
+    ibu: num(detail.ibu) ?? num(recipe?.ibu),
+    abv: num(detail.estAbv) ?? num(recipe?.abv),
+    fg: num(detail.measured?.fg) ?? num(detail.estFg) ?? num(recipe?.fg),
+    og: num(detail.og) ?? num(recipe?.og),
+  };
+}
+
+/**
  * Build the coming-soon list for the taplist. Returns [{ name, style, fg, etaDays }].
  * fg = target/estimated final gravity (from Brewfather). etaDays present only when the
  * live HA projected-FG sensor has a real value. Never throws.
