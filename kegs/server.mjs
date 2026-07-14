@@ -98,7 +98,7 @@ async function doKegAction(id, action, params = {}) {
       // glass + chips for free. Manual params.batch fields win (guest beers / overrides).
       const batch = params.batch || {};
       const bfNo = batch.batchNo ?? params.batchNo ?? null;
-      const bf = bfNo != null ? await batchStats(bfNo) : {};
+      const bf = bfNo != null ? await batchStats(bfNo, { sourceTank: params.sourceTank }) : {};
       const merged = { ...bf, ...batch, style: batch.style ?? bf.style };  // manual overrides BF
       const { patch, event } = K.kegBatch(keg, merged, { at, sourceTank: params.sourceTank });
       db.patchKeg(id, patch, at); db.addEvent(id, event);

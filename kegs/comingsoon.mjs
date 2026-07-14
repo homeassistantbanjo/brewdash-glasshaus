@@ -37,20 +37,45 @@ const COMING_STATUSES = /^(fermenting|conditioning)$/i;
  * beers aren't in Brewfather — the caller falls back to manual entry). batchNoOrName can
  * be a Brewfather batchNo. Never throws.
  */
-export async function batchStats(batchNo) {
+export async function batchStats(batchNo, { sourceTank = null } = {}) {
   if (batchNo == null) return {};
   const detail = await getJson(`${BREWFATHER_URL}/batch/${encodeURIComponent(batchNo)}`);
   if (!detail) return {};
   const recipe = await getJson(`${BREWFATHER_URL}/recipe/${encodeURIComponent(batchNo)}`);
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+
+  // FG PRIORITY: the LIVE Tilt gravity is the ground truth for a beer that's done
+  // fermenting — Brewfather's numbers are the recipe TARGET (estFg) or a manually-logged
+  // measurement (measured.fg) that may lag. If we know the tank this batch is on, read its
+  // assigned Tilt's current gravity from HA and prefer it. Only trust a plausible SG.
+  const liveFg = sourceTank ? await liveTiltGravity(sourceTank) : null;
+
   return {
     style: detail.style || recipe?.style?.name || recipe?.style || null,
     srm: num(detail.srm) ?? num(recipe?.color),
     ibu: num(detail.ibu) ?? num(recipe?.ibu),
     abv: num(detail.estAbv) ?? num(recipe?.abv),
-    fg: num(detail.measured?.fg) ?? num(detail.estFg) ?? num(recipe?.fg),
+    // live Tilt → measured → estimated. Live is the actual current gravity the system reads.
+    fg: liveFg ?? num(detail.measured?.fg) ?? num(detail.estFg) ?? num(recipe?.fg),
     og: num(detail.og) ?? num(recipe?.og),
   };
+}
+
+/**
+ * Read the CURRENT gravity from the Tilt assigned to `tank` (e.g. "tank_1"), via HA:
+ * input_select.<tank>_tilt gives the color → sensor.tilt_<color>_gravity is the live SG.
+ * Returns a plausible SG (0.98–1.20) rounded to 3dp, or null. Never throws.
+ */
+async function liveTiltGravity(tank) {
+  if (!HA_URL || !HA_TOKEN) return null;
+  const hdr = { Authorization: `Bearer ${HA_TOKEN}` };
+  const sel = await getJson(`${HA_URL}/api/states/input_select.${tank}_tilt`, hdr);
+  const color = String(sel?.state || '').toLowerCase();
+  if (!color || color === 'none' || color === 'unavailable') return null;
+  const g = await getJson(`${HA_URL}/api/states/sensor.tilt_${color}_gravity`, hdr);
+  const v = Number(g?.state);
+  if (!Number.isFinite(v) || v < 0.98 || v > 1.2) return null;   // implausible/idle → skip
+  return +v.toFixed(3);
 }
 
 /**
