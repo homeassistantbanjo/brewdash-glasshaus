@@ -34,7 +34,13 @@ export const WATCHLIST = [
     label: 'Glycol reservoir temp' },
   { id: 'sensor.glycol_chiller_temp_temperature',      kind: 'both', maxAgeMin: 30, severity: 'critical',
     label: 'Glycol chiller Zigbee temp' },
-  { id: 'sensor.glycol_power_current_consumption',     kind: 'both', maxAgeMin: 20, severity: 'warning',
+  // AVAIL only, NOT staleness: an IDLE chiller draws a flat ~0.8W that doesn't change, so
+  // HA's last_updated stops advancing and a 'both'/maxAge check false-fires "stale" every
+  // ~20min even though the plug is perfectly alive (same last_updated-only-bumps-on-change
+  // trap as the Tilt gravity). The Kasa cloud-link binary_sensor below is the real "is the
+  // plug actually down" signal. A chiller that SHOULD be cooling but isn't is caught
+  // separately by glycol_no_draw (running_power on + ~0W), which is demand-aware.
+  { id: 'sensor.glycol_power_current_consumption',     kind: 'avail', severity: 'warning',
     label: 'Glycol plug power' },
   { id: 'binary_sensor.glycol_power_cloud_connection', kind: 'avail', on: 'off',   severity: 'warning',
     label: 'Glycol Kasa plug cloud link' },
