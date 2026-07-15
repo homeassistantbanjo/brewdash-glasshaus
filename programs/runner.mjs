@@ -12,7 +12,7 @@
 //   sensor.tank_N_program_status       (written by us: human status string + attrs)
 import { PRESETS } from './presets.mjs';
 import { tick, resolveStartPhase } from './statemachine.mjs';
-import { computeDerived } from './derived.mjs';
+import { computeDerived, updateStableClock } from './derived.mjs';
 import { computeHealth } from './monitor.mjs';
 
 const HA_URL = req('HA_URL');
@@ -503,8 +503,14 @@ async function deriveTank(tankId, by) {
   // maintain state, and PERSIST any change to the HA helpers (survives reboots).
   const before = { latched: st.latched, stableSinceMs: st.stableSinceMs };
   if (d.fermentationStarted) st.latched = true;
-  if (d.isStableNow) { if (st.stableSinceMs == null) st.stableSinceMs = Date.now(); }
-  else st.stableSinceMs = null;
+  // STABILITY CLOCK with noise tolerance (see updateStableClock in derived.mjs). A single
+  // non-stable tick must NOT reset a multi-day clock — a jittery Tilt reading (esp. the
+  // Black Tilt's BLE flakiness) briefly breaks isStableNow and would zero accumulated
+  // stability, so the beer never confirms terminal. The clock only resets after gravity is
+  // continuously non-stable past a grace window. Pure + unit-tested in derived.test.mjs.
+  const clock = updateStableClock(d.isStableNow, st, Date.now());
+  st.stableSinceMs = clock.stableSinceMs;
+  st.unstableSinceMs = clock.unstableSinceMs;
 
   // PERSIST state changes to the HA helpers. This is READ-ONLY w.r.t. the beer
   // (never touches setpoints), so it runs even in DRY_RUN — the whole point is the

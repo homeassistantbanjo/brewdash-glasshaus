@@ -185,3 +185,28 @@ export function computeDerived(t, now = 0) {
 }
 
 export const _fmt = { calcAttenuation, calcProgress, calcDaysToTerminal, projectedFgDate };
+
+// ── STABILITY CLOCK maintenance (PURE) — the multi-day "held terminal" timer, with noise
+// tolerance. A single non-stable tick must NOT reset a days-long clock: a jittery Tilt
+// reading (esp. the Black Tilt's known BLE flakiness) briefly breaks isStableNow and would
+// otherwise zero all accumulated stability → the beer never confirms terminal. So the clock
+// only resets after gravity is CONTINUOUSLY non-stable for a grace window (real fermentation
+// resuming lasts hours; noise is a blip). Same anti-flap principle as the notify hold-down.
+//
+// @param isStableNow  is gravity in the terminal band + flat RIGHT NOW?
+// @param st           { stableSinceMs, unstableSinceMs } (prior clock state; either may be null)
+// @param nowMs        current epoch ms
+// @param graceMs      how long continuously-unstable before the clock resets (default 6h)
+// @returns { stableSinceMs, unstableSinceMs }  the updated clock state
+export const STABLE_RESET_GRACE_MS = 6 * 60 * 60 * 1000;
+export function updateStableClock(isStableNow, st, nowMs, graceMs = STABLE_RESET_GRACE_MS) {
+  const stableSinceMs = st?.stableSinceMs ?? null;
+  if (isStableNow) {
+    return { stableSinceMs: stableSinceMs == null ? nowMs : stableSinceMs, unstableSinceMs: null };
+  }
+  if (stableSinceMs == null) return { stableSinceMs: null, unstableSinceMs: null };   // no clock yet
+  // had a running clock + now unstable: reset ONLY if instability persisted past the grace.
+  const unstableSinceMs = st?.unstableSinceMs ?? nowMs;
+  if (nowMs - unstableSinceMs >= graceMs) return { stableSinceMs: null, unstableSinceMs: null };
+  return { stableSinceMs, unstableSinceMs };   // keep the clock running through the blip
+}

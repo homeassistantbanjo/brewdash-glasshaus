@@ -171,3 +171,39 @@ ok('stall still fires when NOT crashing', r.alerts.some(a=>a.key==='stalled'));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
+
+// ── updateStableClock: noise-tolerant 3-day-stable timer (the bug where a Tilt blip
+//    kept zeroing the multi-day clock) ──
+import { updateStableClock, STABLE_RESET_GRACE_MS } from './derived.mjs';
+{
+  const H = 3600_000, T0 = 1_000_000_000_000;
+  test('stable clock: starts on first stable tick', () => {
+    const r = updateStableClock(true, { stableSinceMs: null, unstableSinceMs: null }, T0);
+    assert.equal(r.stableSinceMs, T0);
+  });
+  test('stable clock: keeps the SAME start across continued stability', () => {
+    const r = updateStableClock(true, { stableSinceMs: T0, unstableSinceMs: null }, T0 + 48 * H);
+    assert.equal(r.stableSinceMs, T0, 'clock not restarted while staying stable');
+  });
+  test('stable clock: a BLIP does NOT reset a running multi-day clock', () => {
+    // 2.5 days into stability, one non-stable tick
+    let st = { stableSinceMs: T0, unstableSinceMs: null };
+    st = updateStableClock(false, st, T0 + 60 * H);       // blip at +60h
+    assert.equal(st.stableSinceMs, T0, 'clock preserved through the blip');
+    assert.ok(st.unstableSinceMs, 'unstable timer started');
+    // stable again shortly after → clock intact, unstable timer cleared
+    st = updateStableClock(true, st, T0 + 60 * H + 60_000);
+    assert.equal(st.stableSinceMs, T0, 'clock still intact after brief blip recovered');
+    assert.equal(st.unstableSinceMs, null);
+  });
+  test('stable clock: SUSTAINED instability past the grace window DOES reset', () => {
+    let st = { stableSinceMs: T0, unstableSinceMs: null };
+    st = updateStableClock(false, st, T0 + 60 * H);                         // goes unstable
+    st = updateStableClock(false, st, T0 + 60 * H + STABLE_RESET_GRACE_MS + 1); // still unstable past grace
+    assert.equal(st.stableSinceMs, null, 'real sustained drop resets the clock');
+  });
+  test('stable clock: not-stable with no running clock is a no-op', () => {
+    const r = updateStableClock(false, { stableSinceMs: null, unstableSinceMs: null }, T0);
+    assert.equal(r.stableSinceMs, null);
+  });
+}
