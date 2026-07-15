@@ -302,8 +302,12 @@ async function bfBrewDayBatches() {
 
 // ---- recipe PREP data for brew day: grain bill, water, salts, hops -------------
 // Amounts come metric (fermentables kg, hops/salts g); the dashboard converts for
-// display. Water volumes: BF often leaves mash/spargeWaterAmount null, so fall back
-// to the computed adjustment volumes.
+// display. Water volumes: mash uses mashWaterAmount (fallback to its adjustment volume).
+// SPARGE vs TOP-UP: on a NO-SPARGE recipe, BF leaves spargeWaterAmount null and puts the
+// TOP-UP water in spargeAdjustments.volume. The old code fell back spargeL to that field
+// and mislabeled top-up as "Sparge" (0.46gal showed under Sparge on a no-sparge batch).
+// Fix: sparge = ONLY the real spargeWaterAmount (null/0 on no-sparge — don't fabricate it);
+// expose spargeAdjustments.volume as topUpL (the actual top-up water the user wanted).
 async function bfRecipePrep(batchIdOrNo) {
   const id = await resolveId(batchIdOrNo);
   return cached(`recipe:${id}`, async () => {
@@ -312,9 +316,28 @@ async function bfRecipePrep(batchIdOrNo) {
   const b = await r.json();
   const rec = b.recipe || {};
   const w = rec.water || {};
+  const eq = rec.equipment || {};
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   const mashL = num(w.mashWaterAmount) ?? num(w.mashAdjustments?.volume);
-  const spargeL = num(w.spargeWaterAmount) ?? num(w.spargeAdjustments?.volume);
+  // THREE distinct water values (shown as separate rows) — Brewfather's source conflates
+  // them, so each is resolved from its authoritative origin, correct for every method:
+  //  • SPARGE: spargeAdjustments.volume is sparge water ONLY when the recipe sparges. A
+  //    no-sparge profile (equipment.waterCalculation "No Sparge" / spargeWaterFormula "0")
+  //    has zero sparge — that volume there is really top-up (Piwo 147's 0.46), so → null.
+  //  • TOP-UP: two sources summed —
+  //      (a) no-sparge recipes park top-up in spargeAdjustments.volume, and
+  //      (b) ANY method: the end-of-boil vessel-capacity gap = batchSize −
+  //          fermenterVolumeBeforeTopUp (positive) — a big batch (e.g. a 25gal on the B80)
+  //          exceeds capacity, so BF caps mash+sparge and you top up at the end to hit target.
+  const noSparge = /no.?sparge/i.test(eq.waterCalculation || '') || String(eq.spargeWaterFormula).trim() === '0';
+  const adjVol = num(w.spargeAdjustments?.volume);
+  const spargeL = noSparge ? null : (num(w.spargeWaterAmount) ?? adjVol);
+  const batchSizeL = num(rec.batchSize), fermBeforeL = num(eq.fermenterVolumeBeforeTopUp);
+  const endGapL = (batchSizeL != null && fermBeforeL != null && batchSizeL - fermBeforeL > 0.05)
+    ? +(batchSizeL - fermBeforeL).toFixed(2) : null;
+  const noSpargeTopUp = noSparge ? adjVol : null;
+  const topUpL = (noSpargeTopUp != null || endGapL != null)
+    ? +((noSpargeTopUp || 0) + (endGapL || 0)).toFixed(2) : null;
   const miscs = Array.isArray(rec.miscs) ? rec.miscs : [];
   return {
     name: rec.name || b.name, batchNo: b.batchNo, style: rec.style?.name || null,
@@ -324,7 +347,7 @@ async function bfRecipePrep(batchIdOrNo) {
     // water agents (salts/acids) vs other mash miscs — keep unit BF provides (g/ml)
     salts: miscs.filter((m) => m.type === 'Water Agent').map((m) => ({ name: m.name, amount: num(m.amount), unit: m.unit || 'g', use: m.use })),
     otherMiscs: miscs.filter((m) => m.type !== 'Water Agent').map((m) => ({ name: m.name, amount: num(m.amount), unit: m.unit || 'g', use: m.use, type: m.type })),
-    water: { mashL, spargeL },
+    water: { mashL, spargeL, topUpL },
     mashSteps: (rec.mash?.steps || []).map((s) => ({ name: s.name, tempC: num(s.stepTemp), min: num(s.stepTime) })),
     // TARGET/expected values from the recipe, so brew-day entry shows "target X" next
     // to each field. Gravities unit-agnostic SG; volumes L→gal for the panel.

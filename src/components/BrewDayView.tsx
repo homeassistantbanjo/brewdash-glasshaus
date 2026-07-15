@@ -314,11 +314,15 @@ function PrepSection({ prep }: { prep: any }) {
           {prep.fermentables?.length ? row('— total —',
             kgToLbOz((prep.fermentables).reduce((s: number, f: any) => s + (f.kg || 0), 0))) : null}
         </div>
-        {/* WATER */}
+        {/* WATER — Mash / Sparge / Top-up as distinct values (source conflates them; the
+            sidecar resolves each from its authoritative field so all methods read right:
+            no-sparge → Sparge "—" + Top-up shown; sparge → Sparge shown; big batch over
+            vessel capacity → Top-up = end-of-boil gap). */}
         <div style={card}>
           {head('Water')}
           {row('Mash / strike', lToGal(prep.water?.mashL))}
           {row('Sparge', lToGal(prep.water?.spargeL))}
+          {prep.water?.topUpL != null && row('Top-up', lToGal(prep.water?.topUpL))}
           {row('Boil size', lToGal(prep.boilSizeL))}
           {row('Batch size', lToGal(prep.batchSizeL))}
         </div>
