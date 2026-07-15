@@ -285,9 +285,16 @@ async function bfBrewDayBatches() {
   if (Date.now() - _brewdayCache.at < 30_000 && _brewdayCache.list) return _brewdayCache.list;
   const out = [];
   for (const status of ['Planning', 'Brewing']) {
-    const r = await fetch(`${BF}/batches?status=${status}&limit=25`, { headers: { Authorization: AUTH } });
+    // include recipe.name: a batch's own `name` is Brewfather's generic placeholder "Batch"
+    // until named — the REAL beer name lives on the linked recipe. Fall back recipe → name
+    // → "#<batchNo>" so a batch never displays as a bare number or the useless "Batch".
+    const r = await fetch(`${BF}/batches?status=${status}&limit=25&include=batchNo,name,status,recipe.name`, { headers: { Authorization: AUTH } });
     if (!r.ok) throw new Error(`Brewfather list (${status}) HTTP ${r.status}`);
-    for (const b of await r.json()) out.push({ _id: b._id, batchNo: b.batchNo, name: b.name, status: b.status });
+    for (const b of await r.json()) {
+      const recipeName = b.recipe && b.recipe.name;
+      const name = recipeName || (b.name && b.name !== 'Batch' ? b.name : `#${b.batchNo}`);
+      out.push({ _id: b._id, batchNo: b.batchNo, name, status: b.status });
+    }
   }
   _brewdayCache = { at: Date.now(), list: out };
   return out;
