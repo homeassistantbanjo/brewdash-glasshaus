@@ -1,0 +1,6 @@
+# Shell scripts + Docker entrypoints MUST be LF — CRLF breaks the shebang in Linux
+# containers (exit 127 "not found"). Windows autocrlf would otherwise reintroduce CRLF.
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf
+*.mjs text eol=lf
+Dockerfile text eol=lf
