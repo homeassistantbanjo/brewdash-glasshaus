@@ -35,8 +35,12 @@ input_select:
   tank_1_tilt: &tilt_opts
     name: Tank 1 Tilt
     icon: mdi:thermometer
-    # Colors the app knows (src ALL_TILT_COLORS). Purple = the new Tilt Pro.
-    options: ["None", "Black", "Red", "Blue", "Purple", "Green", "Orange", "Yellow", "Pink"]
+    # OWNED Tilts first (Black/Red/Orange/Purple — Black & Purple are Pros), then the rest
+    # of the Tilt color set for future-proofing. NOTE: a package input_select re-asserts
+    # this list on every HA restart, so THIS is the source of truth — a runtime set_options
+    # only lasts until the next reload. (Live HA was stale at [None,Black,Red,Blue] before
+    # this; that was an un-reloaded old config, not what's declared here.)
+    options: ["None", "Black", "Red", "Orange", "Purple", "Blue", "Green", "Yellow", "Pink"]
   tank_2_tilt:
     <<: *tilt_opts
     name: Tank 2 Tilt
