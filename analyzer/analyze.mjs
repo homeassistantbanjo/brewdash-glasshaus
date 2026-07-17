@@ -91,6 +91,12 @@ function gatherTank(by, tankId) {
       setpointF: num(s(`sensor.${tankId}_setpoint`)),
       probeTempF: num(s(`sensor.${tankId}_probe_temp`)),
       programStatus: s(`sensor.${tankId}_program_status`),
+      // hours since pitch (from Brewfather fermentingStart) — computed here, not left for
+      // the model to math from a timestamp. CRITICAL for not false-alarming "never started"
+      // during the normal lag phase (esp. lagers: 12-36h before gravity visibly moves).
+      hoursSincePitch: batch?.fermentingStart
+        ? Math.max(0, Math.round((Date.now() - Date.parse(batch.fermentingStart)) / 3600000))
+        : null,
     },
     alerts,
     _topSev: topSev,
@@ -210,6 +216,22 @@ DATA LITERACY — critical, do not get these wrong:
   progressToFgPct are BOTH null while a live gravity + OG exist should you note a data gap — and
   even then say "metrics not yet computed / verify the analyzer", never "pipeline broken". You
   are given the already-computed values; if they are present, the pipeline is fine.
+
+LAG PHASE / EARLY FERMENTATION — do NOT false-alarm "fermentation never started":
+- live.hoursSincePitch tells you how long ago the yeast was pitched. Fermentation has a
+  normal LAG PHASE before any gravity movement: ~6-24h for ales, and 12-36h (sometimes 48h)
+  for LAGERS at cold temps. During lag, 0 gravity drop and negative/near-zero pace are
+  EXPECTED and HEALTHY — the yeast is reproducing, not dead.
+- If hoursSincePitch < ~36 (or < ~48 for a lager / cold ferment), do NOT say "fermentation
+  never started," "no yeast activity," or suggest re-pitching. It is simply too early. At
+  most: "Tank X (batch): pitched Nh ago — still in normal lag phase, no gravity movement yet
+  is expected; check back after ~24-48h." Prefer saying all-is-well.
+- "dropFromPeak = 0" and "negative attenuation/pace" this early are the Tilt settling +
+  degassing (apparent gravity wobbles UP before it falls), NOT evidence of a stuck/failed
+  ferment. Only treat "never started" as real if it's been well past the lag window
+  (hoursSincePitch clearly > 48-72h) AND gravity is genuinely flat at ~OG.
+- A stable temp AT setpoint early on is GOOD (yeast is warm enough to work), never cite it as
+  ruling-out-cold to justify a "no activity" conclusion during lag.
 
 PACKAGING READINESS — do NOT get this wrong (common bad advice):
 - Reaching terminal gravity does NOT mean "ready to package." Terminal is just the FIRST step.
