@@ -7,7 +7,7 @@
  * Notes/environment aren't here — the Brewfather API can't take them (see the
  * container header). Those would be a separate GlassHaus-local feature.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { theme, hexA, fx } from '../theme/tokens';
 import { BREWFATHER_URL } from '../config';
 import { useAllTanks } from '../hooks/useBrewery';
@@ -45,6 +45,9 @@ export function BrewDayView() {
     { loading: false, msg: null, err: null });
   const [current, setCurrent] = useState<any>(null);
   const [prep, setPrep] = useState<any>(null);
+  // bumped after a save to force the current-values effect to re-fetch from Brewfather
+  // (the old `setBatchId(b=>b)` was a no-op — same value = no re-run — so values vanished).
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     fetch(`${BREWFATHER_URL}/batches`)
@@ -56,10 +59,17 @@ export function BrewDayView() {
   const selected = active.find((b) => String(b.batchNo) === batchId) ?? active[0] ?? null;
   const selId = selected ? String(selected.batchNo) : null;
 
-  // fetch current measured values from Brewfather to prefill/show what's there
+  // fetch current measured values from Brewfather to prefill/show what's there. Re-runs on
+  // batch change AND after a save (refreshKey bump) so just-written values show. Only blank
+  // the displayed values when the BATCH changed — on a post-save refresh keep them so the
+  // fields don't flash empty (and Brewfather read-back can briefly lag).
+  const prevSelId = useRef<string | null>(null);
   useEffect(() => {
     if (!selected) return;
-    setCurrent(null); setPrep(null); setState((s) => ({ ...s, err: null }));
+    const batchChanged = prevSelId.current !== selId;
+    prevSelId.current = selId;
+    if (batchChanged) { setCurrent(null); setPrep(null); }
+    setState((s) => ({ ...s, err: null }));
     const id = selected._id || selected.batchNo;
     fetch(`${BREWFATHER_URL}/batch/${encodeURIComponent(id)}`)
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
@@ -69,7 +79,7 @@ export function BrewDayView() {
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(setPrep)
       .catch(() => {/* prep is best-effort; measurement entry still works */});
-  }, [selId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selId, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
     if (!selected) return;
@@ -88,9 +98,15 @@ export function BrewDayView() {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setState({ loading: false, msg: `Saved to Brewfather: ${(j.wrote || []).join(', ')}`, err: null });
+      // OPTIMISTICALLY show what we just saved as the current values IMMEDIATELY — the fields
+      // read from current.measured[key], so merging the sent body in means the entered values
+      // persist visibly right away (Brewfather's read-back can lag a few seconds). Clearing
+      // the draft is correct once saved (it's now "current", not an unsaved edit).
+      setCurrent((c: any) => ({ ...(c || {}), measured: { ...(c?.measured || {}), ...body } }));
       setDraft({});
-      // refresh the shown current values
-      setTimeout(() => setBatchId((b) => b), 300);
+      // then reconcile against Brewfather (bump refreshKey → the fetch effect re-runs; the
+      // old setBatchId(b=>b) was a no-op, which is why values vanished with nothing to show).
+      setTimeout(() => setRefreshKey((k) => k + 1), 1500);
     } catch (e) {
       setState({ loading: false, msg: null, err: (e as Error).message });
     }
