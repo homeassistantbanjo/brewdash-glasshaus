@@ -13,7 +13,29 @@ her Gmail Drafts for her to review and send.
 
 ---
 
-## Who it's for
+## Product positioning: build for two, architect for SaaS
+
+Ship a **single-tenant** app for two users (Jordan + mom) now. But make
+"going multi-tenant to sell it" a **refactor, not a rewrite** by paying a few
+cheap costs up front:
+
+- **`tenant_id` (owner) on every table from day one** — even with one tenant.
+  Retrofitting tenancy later is the expensive migration; this avoids it.
+- **Auth stays pluggable** — a 2-email allowlist now, swappable for self-serve
+  signup + per-tenant provisioning later.
+- **Gmail strictly per-account** — each user connects their own Google; no
+  shared/global mail credentials.
+- Keep billing, ToS/Privacy/DPA, and Google OAuth verification out of scope
+  now, but leave seams for them (see "Future: selling it").
+
+⚠️ **Known gate for selling:** `gmail.compose` is a Google *restricted* scope
+— free in Testing mode (≤100 users), but public launch needs OAuth
+verification + an annual third-party CASA assessment (~$500–$4k/yr). Decide
+Gmail-core vs copy/paste fallback before public launch.
+
+---
+
+## Who it's for (now)
 
 - **Agent (mom)** — uploads CRM exports, browses contacts, matches listings,
   generates and reviews email drafts.
@@ -22,6 +44,23 @@ her Gmail Drafts for her to review and send.
 
 Exactly **two Google accounts** may sign in (hard allowlist). Everyone else
 is rejected.
+
+---
+
+## Look & feel
+
+Simple, modern, clean — but colorful and professional. Not a sterile
+enterprise CRM; not a toy. Direction:
+
+- Generous whitespace, clear type hierarchy, one confident accent color plus
+  supporting tints (colorful but disciplined — think a couple of vivid
+  gradients/accent chips, not a rainbow).
+- Rounded cards, soft shadows, smooth micro-interactions; fast and calm.
+- Content-first layouts: the contact list, the match results, and the draft
+  review are the hero screens and should feel effortless.
+- Fully responsive (she may use a laptop or tablet).
+- Design tokens (color, spacing, radius, type) centralized so the whole look
+  can be re-skinned for a sellable brand later.
 
 ---
 
@@ -78,21 +117,38 @@ in this repo.
 
 ## Data model (first cut — refine against real CSV)
 
-- **contact** — `id`, `crm_id?`, `name`, `email`, `phone`, `raw_fields (jsonb)`,
-  `source_notes (text)`, `created_at`, `updated_at`, `hand_edited (bool)`
+Every table carries `tenant_id` (owner) even though there is one tenant now.
+
+- **contact** — `id`, `tenant_id`, `crm_id?`, `name`, `email`, `phone`,
+  `raw_fields (jsonb)`, `source_notes (text)`, `status (enum)`,
+  `status_changed_at`, `created_at`, `updated_at`, `hand_edited (bool)`,
+  `unsubscribe_token`
 - **buyer_profile** — `contact_id`, `price_min`, `price_max`, `beds_min`,
   `baths_min`, `location[]`, `must_haves[]`, `nice_to_haves[]`,
   `lifestyle_tags[]`, `dealbreakers[]`, `confidence`, `edited_by_user (bool)`
-- **listing** — `id`, `raw_text`, `address`, `price`, `beds`, `baths`,
-  `features[]`, `created_at`
+- **listing** — `id`, `tenant_id`, `raw_text`, `address`, `price`, `beds`,
+  `baths`, `features[]`, `created_at`
 - **match** — `listing_id`, `contact_id`, `score`, `reasons[]`, `status`
 - **email_draft** — `match_id`, `subject`, `body`, `gmail_draft_id`,
   `status (draft/sent)`, `created_at`
+- **suppression** — `tenant_id`, `email_hash`, `reason (opt_out/deleted)`,
+  `created_at` — the do-not-contact + right-to-be-forgotten list. Stores a
+  **hash of the email, not the email**, so it survives re-import and can
+  silently skip people without retaining the PII of anyone who asked to be
+  forgotten.
 
-**Upsert on re-import:** key = email (or `crm_id` if present). Update raw CRM
-fields; re-parse a profile only when notes changed; **never overwrite a field
-the agent edited by hand** (`edited_by_user`). Show a diff before commit:
-"14 updated · 3 new · 2 changed notes — re-parse those?"
+`contact.status` enum: `active` · `bought` (deal closed) · `cold`
+(inactive) · `do_not_contact` (opted out) · *(deleted rows are removed;
+their tombstone lives in `suppression`)*.
+
+**Upsert on re-import:** key = email (or `crm_id` if present).
+1. **Check `suppression` first** — any incoming row whose `email_hash` is
+   suppressed is skipped entirely (never resurrected or re-pitched).
+2. Update raw CRM fields; re-parse a profile only when notes changed.
+3. **Never overwrite a field the agent edited by hand** (`edited_by_user`),
+   and never silently flip a contact out of `do_not_contact`/`bought`/`cold`.
+4. Show a diff before commit: "14 updated · 3 new · 2 changed notes ·
+   1 skipped (unsubscribed) — re-parse the changed ones?"
 
 ---
 
@@ -117,6 +173,37 @@ the agent edited by hand** (`edited_by_user`). Show a diff before commit:
 
 ---
 
+## Contact lifecycle & suppression
+
+A contact can be `active → bought` (deal closed), `active → cold`
+(inactive), or `→ do_not_contact` (opted out), and can be **deleted on
+request**. Only `active` contacts are eligible for matching/drafting.
+
+**How a contact gets suppressed (do-not-contact):**
+1. **Mom marks them** in the contact detail screen (always-available
+   backstop).
+2. **Unsubscribe link in emails** — every generated email includes a
+   tokenized unsubscribe link (`/u/{unsubscribe_token}`). Clicking it adds an
+   `email_hash` to `suppression` and flips the contact to `do_not_contact`,
+   honored immediately. This is the one **public, unauthenticated** endpoint
+   in the app (the link must work for the recipient) — it does nothing but
+   suppress, and reveals no data.
+
+**Delete on request (right to be forgotten):** hard-delete the contact +
+profile + drafts, and write an `email_hash` tombstone to `suppression`
+(`reason=deleted`). Re-import silently skips them; we retain no PII.
+
+**Why suppression is hashed & separate:** re-importing a KW export that still
+contains an opted-out or deleted person must **not** bring them back. The
+import checks `suppression` before creating/updating any contact.
+
+> Note: because these are 1:1 personal emails an agent sends from her own
+> Gmail (not bulk marketing blasts), the strict marketing-email rules may not
+> all apply — but building unsubscribe + suppression anyway keeps us clean and
+> is required if we ever sell this as a marketing tool.
+
+---
+
 ## Server hardening (holds clients' PII)
 
 - Login gated to a **2-email allowlist**; nothing public.
@@ -133,11 +220,29 @@ the agent edited by hand** (`edited_by_user`). Show a diff before commit:
 | Phase | Delivers | Blocker |
 |---|---|---|
 | **0. Data** | Real (anonymizable) KW Command CSV export | **need from mom** |
-| **1. Auth + import** | Google login (allowlist) · CSV upload · upsert · contacts browser + detail/edit | Phase 0 |
+| **1. Auth + import** | Google login (allowlist) · CSV upload · upsert w/ suppression check · contacts browser + detail/edit · lifecycle status | Phase 0 |
 | **2. Parse** | AI parses notes → buyer profiles · review screen | Phase 1 |
 | **3. Match** | Paste listing → ranked matches with reasons | Phase 2 |
-| **4. Draft** | Select buyers → personal emails → Gmail Drafts | Google OAuth setup |
-| **5. Polish** | Her voice · re-pitch memory · tags/filters | — |
+| **4. Draft** | Select buyers → personal emails (w/ unsubscribe link) → Gmail Drafts | Google OAuth setup |
+| **5. Lifecycle** | Do-not-contact · unsubscribe endpoint · delete-on-request · re-pitch memory | Phase 4 |
+| **6. Polish** | Her voice · tags/filters · design pass | — |
+
+---
+
+## Future: selling it (parked, but architected for)
+
+Not built now — recorded so today's decisions leave room for it:
+
+- **Multi-tenant** — flip the 2-email allowlist to self-serve signup; the
+  `tenant_id` columns are already in place.
+- **Billing** — Stripe subscriptions, trial, tiers.
+- **Legal** — Terms of Service, Privacy Policy, **Data Processing Agreement**
+  (you'd be a data processor for customers' client PII).
+- **Google OAuth verification + CASA** assessment for the restricted
+  `gmail.compose` scope (~$500–$4k/yr) — or a copy/paste fallback to avoid it.
+- **Anti-spam compliance** — build to strictest (CASL) when we go public.
+- **Customer churn / data retention** — on subscription cancel: offer export,
+  keep read-only for a ~30-day grace period, then permanently delete.
 
 ---
 
