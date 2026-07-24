@@ -215,6 +215,54 @@ import checks `suppression` before creating/updating any contact.
 
 ---
 
+## Hosting & database
+
+Served on a **subdomain** of one of the owner's sites (e.g.
+`matcher.<yourdomain>`).
+
+**App hosting — default: Vercel.** Cleanest fit for Next.js: custom subdomain,
+automatic HTTPS, server-side secrets, serverless API routes. Self-hosting on
+the owner's own box (Docker + a reverse proxy for TLS) is a fine alternative
+if the other sites already live there — the trade is running updates, certs,
+and backups yourself. Decision can follow wherever "substrate"/the other sites
+are hosted.
+
+**Database — default: Neon (managed PostgreSQL).** Chosen for security +
+operational simplicity:
+
+- **Encryption at rest** and **TLS-only** connections (`sslmode=require`).
+- **Automated, encrypted backups** + point-in-time restore.
+- Not exposed publicly beyond the app: use private networking where the host
+  supports it, otherwise an **IP allowlist** to the app's egress.
+- A **least-privilege DB role** for the app (no superuser).
+- Branching for safe schema testing without touching prod data.
+
+Supabase (Postgres + Row-Level Security) is an equivalent-security
+alternative; we run our own auth so we don't need its extras. If the app is
+self-hosted, a **Dockerized Postgres on a private network** (never public,
+owner-managed encrypted backups) is acceptable. App-level encryption for Gmail
+tokens/PII sits on top of whichever DB is chosen.
+
+---
+
+## Data deletion policy
+
+Two distinct events — **read-only/frozen is never a substitute for delete:**
+
+1. **Deletion request** — a buyer asks to be forgotten, *or* a customer
+   explicitly asks to erase their account → **immediate hard purge** of the
+   PII. For contacts we keep only a hashed `suppression` tombstone so a
+   re-import can't resurrect them; nothing recoverable remains. No grace,
+   no read-only limbo.
+2. **Subscription cancellation** (future/SaaS) — offer a **data export**, then
+   a **frozen recovery window** (log in to export only, no other use) of
+   *N* days, after which the data is **hard-deleted**. The window exists so a
+   lapsed customer can retrieve their data — it is *not* how a deletion request
+   is satisfied, and it is skipped entirely when erasure is requested.
+   - Default window: **30 days**, then permanent delete. Adjustable.
+
+---
+
 ## Phased build
 
 | Phase | Delivers | Blocker |
@@ -241,8 +289,9 @@ Not built now — recorded so today's decisions leave room for it:
 - **Google OAuth verification + CASA** assessment for the restricted
   `gmail.compose` scope (~$500–$4k/yr) — or a copy/paste fallback to avoid it.
 - **Anti-spam compliance** — build to strictest (CASL) when we go public.
-- **Customer churn / data retention** — on subscription cancel: offer export,
-  keep read-only for a ~30-day grace period, then permanently delete.
+- **Customer churn / data retention** — see the deletion policy below. On
+  cancellation: export offered, a frozen recovery window, then **hard delete**.
+  A frozen/read-only window is *not* a delete.
 
 ---
 
