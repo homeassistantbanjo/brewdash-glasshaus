@@ -1,0 +1,149 @@
+// Real-Estate CRM Matcher — data model.
+//
+// Single-tenant today (two users) but every table carries `tenantId` so
+// going multi-tenant later is a refactor, not a rewrite. See ../PLAN.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ContactStatus {
+  active // eligible for matching + drafting
+  bought // deal closed (won) — kept for history, excluded from matching
+  cold // inactive/unengaged — excluded until reactivated
+  do_not_contact // opted out — suppressed from all email
+}
+
+enum SuppressionReason {
+  opt_out // unsubscribed (link) or marked do-not-contact by the agent
+  deleted // right-to-be-forgotten: PII erased, tombstone kept
+}
+
+enum DraftStatus {
+  draft // created in Gmail Drafts, awaiting the agent's review/send
+  sent // agent reported/marked as sent
+  discarded
+}
+
+// A contact = a buyer in the agent's book of business.
+model Contact {
+  id              String        @id @default(cuid())
+  tenantId        String        @map("tenant_id")
+  crmId           String?       @map("crm_id") // KW Command id if the export has one
+  name            String
+  email           String?
+  phone           String?
+  rawFields       Json          @default("{}") @map("raw_fields") // original CSV row
+  sourceNotes     String?       @map("source_notes") // "what they're looking for" text
+  status          ContactStatus @default(active)
+  statusChangedAt DateTime?     @map("status_changed_at")
+  handEdited      Boolean       @default(false) @map("hand_edited") // agent edited raw fields
+  unsubscribeToken String       @unique @default(cuid()) @map("unsubscribe_token")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  profile BuyerProfile?
+  matches Match[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, status])
+  @@map("contacts")
+}
+
+// Structured, matchable buyer criteria parsed by AI from notes/fields.
+model BuyerProfile {
+  id           String   @id @default(cuid())
+  contactId    String   @unique @map("contact_id")
+  priceMin     Int?     @map("price_min")
+  priceMax     Int?     @map("price_max")
+  bedsMin      Int?     @map("beds_min")
+  bathsMin     Float?   @map("baths_min")
+  location     String[] @default([])
+  mustHaves    String[] @default([]) @map("must_haves")
+  niceToHaves  String[] @default([]) @map("nice_to_haves")
+  lifestyleTags String[] @default([]) @map("lifestyle_tags")
+  dealbreakers String[] @default([])
+  confidence   Float?   // 0..1 from the parser
+  editedByUser Boolean  @default(false) @map("edited_by_user") // protect from re-parse
+  parsedFromHash String? @map("parsed_from_hash") // hash of notes last parsed
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@map("buyer_profiles")
+}
+
+// A listing the agent pastes in to match against her buyers.
+model Listing {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  rawText   String   @map("raw_text")
+  address   String?
+  price     Int?
+  beds      Int?
+  baths     Float?
+  features  String[] @default([])
+  createdAt DateTime @default(now()) @map("created_at")
+
+  matches Match[]
+
+  @@index([tenantId])
+  @@map("listings")
+}
+
+// A scored match of one buyer to one listing (+ the "why").
+model Match {
+  id        String      @id @default(cuid())
+  tenantId  String      @map("tenant_id")
+  listingId String      @map("listing_id")
+  contactId String      @map("contact_id")
+  score     Int // 0..100 fit
+  reasons   String[]    @default([])
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  listing Listing     @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  contact Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  draft   EmailDraft?
+
+  // "don't re-pitch": one match per (listing, contact)
+  @@unique([listingId, contactId])
+  @@index([tenantId])
+  @@map("matches")
+}
+
+// A generated email, created in the agent's Gmail Drafts.
+model EmailDraft {
+  id           String      @id @default(cuid())
+  tenantId     String      @map("tenant_id")
+  matchId      String      @unique @map("match_id")
+  subject      String
+  body         String
+  gmailDraftId String?     @map("gmail_draft_id")
+  status       DraftStatus @default(draft)
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("email_drafts")
+}
+
+// Do-not-contact + right-to-be-forgotten list.
+// Keyed by an HMAC hash of the email (NOT the email) so it survives re-import
+// and lets us skip people without retaining PII for deleted contacts.
+model Suppression {
+  id        String            @id @default(cuid())
+  tenantId  String            @map("tenant_id")
+  emailHash String            @map("email_hash")
+  reason    SuppressionReason
+  createdAt DateTime          @default(now()) @map("created_at")
+
+  @@unique([tenantId, emailHash])
+  @@index([tenantId])
+  @@map("suppressions")
+}
