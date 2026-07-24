@@ -227,21 +227,23 @@ if the other sites already live there — the trade is running updates, certs,
 and backups yourself. Decision can follow wherever "substrate"/the other sites
 are hosted.
 
-**Database — default: Neon (managed PostgreSQL).** Chosen for security +
-operational simplicity:
+**Database — Supabase (managed PostgreSQL).** Chosen to sit alongside the
+owner's existing Supabase infra ("substrate"). Supabase here is *just Postgres*
+— we keep our own Auth.js login and don't use Supabase Auth.
 
 - **Encryption at rest** and **TLS-only** connections (`sslmode=require`).
 - **Automated, encrypted backups** + point-in-time restore.
-- Not exposed publicly beyond the app: use private networking where the host
-  supports it, otherwise an **IP allowlist** to the app's egress.
+- **Row-Level Security** available as defense-in-depth later (not required
+  while single-tenant).
 - A **least-privilege DB role** for the app (no superuser).
-- Branching for safe schema testing without touching prod data.
+- **Connection pooling detail:** the app runtime connects through Supabase's
+  PgBouncer **pooled** URL (port 6543, `pgbouncer=true`); Prisma **migrations**
+  use the **direct** URL (port 5432). Wired via Prisma's `url` + `directUrl`
+  (see `.env.example`).
 
-Supabase (Postgres + Row-Level Security) is an equivalent-security
-alternative; we run our own auth so we don't need its extras. If the app is
-self-hosted, a **Dockerized Postgres on a private network** (never public,
-owner-managed encrypted backups) is acceptable. App-level encryption for Gmail
-tokens/PII sits on top of whichever DB is chosen.
+App-level encryption for Gmail tokens/PII sits on top of the DB. If the app is
+ever self-hosted instead, a Dockerized Postgres on a private network is an
+acceptable substitute.
 
 ---
 

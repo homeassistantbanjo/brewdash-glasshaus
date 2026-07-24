@@ -9,7 +9,10 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // App runtime uses Supabase's pooled connection (PgBouncer).
+  url       = env("DATABASE_URL")
+  // Migrations need a direct (non-pooled) connection.
+  directUrl = env("DIRECT_URL")
 }
 
 enum ContactStatus {

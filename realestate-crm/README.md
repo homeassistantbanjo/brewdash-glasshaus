@@ -14,7 +14,7 @@ sellable SaaS. See [`PLAN.md`](./PLAN.md) for the full design.
 ## Stack
 
 - **Next.js 14** (App Router) + React 18 + TypeScript
-- **Prisma** + **PostgreSQL** — data model in `prisma/schema.prisma`
+- **Prisma** + **Supabase PostgreSQL** — data model in `prisma/schema.prisma`
 - **Auth.js (NextAuth v5)** — Google OAuth, hard 2-email allowlist
 - **Anthropic Claude** — the AI jobs (server-side only)
 
@@ -32,7 +32,8 @@ npm run dev                       # http://localhost:3000
 
 | Var | What |
 |---|---|
-| `DATABASE_URL` | PostgreSQL connection string |
+| `DATABASE_URL` | Supabase **pooled** connection (PgBouncer, port 6543) — app runtime |
+| `DIRECT_URL` | Supabase **direct** connection (port 5432) — Prisma migrations |
 | `AUTH_SECRET` | `openssl rand -base64 32` |
 | `ALLOWED_EMAILS` | Comma-separated allowlist (Jordan + mom), lowercase |
 | `ADMIN_EMAIL` | Which allowlisted account is admin |
