@@ -8,6 +8,7 @@ import { MetricDetail, MetricDetailSpec } from './MetricDetail';
 import { EquipmentChip } from './EquipmentStrip';
 import { CornerBrackets, ScanLine } from './HudFrame';
 import { ProgressRing } from './ProgressRing';
+import { FermPlanSummary } from './FermPlanSummary';
 import { Panel } from './hud/Panel';
 import { BarGauge, TickReadout } from './hud/Gauge';
 import { theme, stateColor, hexA, textGlow, fx } from '../theme/tokens';
@@ -203,7 +204,8 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
 
   return (
     <Panel accent={focused ? accent : hexA(accent, 0.85)}
-      header={tank.label.toUpperCase()} status={statusLabel} statusColor={accent} id={idTag}
+      header={(fermenting && batch!.name ? `${tank.label} - ${batch!.name}` : tank.label).toUpperCase()}
+      status={statusLabel} statusColor={accent} id={idTag}
       glow={fermenting || focused}
       style={{
         position: 'relative',
@@ -246,13 +248,20 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
       }}>
         {fermenting ? (
           <>
-            {/* left headline: live gravity */}
+            {/* left headline: live gravity. When the Tilt has dropped out (weak BLE), the
+                shown value is a HELD last-good from VM — badged 'GRAVITY · HELD' + ambered
+                so it's visibly not live, and the drilldown explains why. */}
             <HeadlineStat align="right"
-              value={fmt(batch!.gravity.value, gdp)} color={theme.color.cyan}
-              label={`→ FG ${batch!.expectedFg?.toFixed(3) ?? '—'}`} sub="GRAVITY" big
+              value={fmt(batch!.gravity.value, gdp)}
+              color={batch!.gravityHeld ? theme.color.amber : theme.color.cyan}
+              label={`→ FG ${batch!.expectedFg?.toFixed(3) ?? '—'}`}
+              sub={batch!.gravityHeld ? 'GRAVITY · HELD' : 'GRAVITY'} big
               onClick={() => open({
-                label: 'Gravity', value: fmt(b!.gravity.value, gdp), color: theme.color.cyan,
-                blurb: 'Live specific gravity from the Tilt. Falls from the original gravity (OG) toward the expected final gravity (FG) as yeast ferment sugars. The full fermentation curve below is from Brewfather’s reading history.',
+                label: 'Gravity', value: fmt(b!.gravity.value, gdp),
+                color: b!.gravityHeld ? theme.color.amber : theme.color.cyan,
+                blurb: b!.gravityHeld
+                  ? 'HELD last-good gravity — the Tilt has dropped off Bluetooth (weak signal), so this is the most recent value from our metrics store, not a live read. Attenuation/velocity are computed from it so the card stays whole; they refresh the moment the Tilt reconnects. Temp control is UNAFFECTED (it ignores held gravity).'
+                  : 'Live specific gravity from the Tilt. Falls from the original gravity (OG) toward the expected final gravity (FG) as yeast ferment sugars. The full fermentation curve below is from Brewfather’s reading history.',
                 series: sgSeries, seriesLabel: 'Gravity curve (full ferment)',
                 reference: b!.expectedFg ?? null, referenceLabel: 'FG', referenceColor: theme.color.amber,
                 facts: [
@@ -377,6 +386,9 @@ export function TankCard({ tank, batch, controllerPower, focused, onClick }: {
           {/* prominent STAGE badge — where the beer is in the ferment→package arc,
               so it's not just a small header word. Shows the readiness call. */}
           <StageBadge batch={batch!} programPhase={programPhase} />
+          {/* ferm-plan timeline: where it is / where it's going / when. Only renders when a
+              program plan exists (returns null otherwise). */}
+          <FermPlanSummary tankId={tank.id} />
         </div>
       )}
 
@@ -618,7 +630,14 @@ function readiness(b: ActiveBatch, programPhase: string | null): { headline: str
   }
   const a = b.attenuation;
   if (a == null) return { headline: 'FERMENTING', sub: 'no gravity signal yet', color: t.amber };
-  if (a < 30) return { headline: 'LAG', sub: 'getting started', color: t.amber };
+  // LAG = truly before fermentation engages. Low attenuation % ALONE isn't lag — a low-OG
+  // beer (e.g. OG 1.035) only has ~27 pts to give, so it can be visibly dropping and still
+  // read <30% attenuation. Only call it LAG if gravity ISN'T moving yet: no started-latch
+  // AND no meaningful drop-from-peak AND velocity ~flat. Otherwise it's ACTIVE.
+  const moving = b.fermentationStarted === true
+    || (b.gravityDropFromPeak != null && b.gravityDropFromPeak >= 2)
+    || (b.gravityVelocityPerDay != null && b.gravityVelocityPerDay < -0.001);
+  if (a < 30 && !moving) return { headline: 'LAG', sub: 'getting started', color: t.amber };
   if (a < 60) return { headline: 'ACTIVE', sub: 'fermenting hard', color: t.green };
   if (a < 78) return { headline: 'SLOWING', sub: 'attenuation slowing — approaching terminal', color: t.green };
   return { headline: 'TERMINAL', sub: 'at final gravity — confirming stability', color: t.cyan };

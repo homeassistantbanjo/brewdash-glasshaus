@@ -21,7 +21,7 @@ DURATION="${1:-110}"
 IMG=ghcr.io/homeassistantbanjo/brewdash-glasshaus-programs:latest
 DEMO_NAME=glasshaus-programs-demo
 
-HA=http://192.168.50.127:8123
+HA=http://homeassistant.lan:8123
 TOK=$(docker exec glasshaus sh -c 'grep -oE "haToken: \"[^\"]+\"" /usr/share/nginx/html/config.js | sed "s/haToken: \"//;s/\"//"')
 H=(-H "Authorization: Bearer $TOK" -H 'content-type: application/json')
 hh() { curl -s -m 12 "${H[@]}" "$@"; }

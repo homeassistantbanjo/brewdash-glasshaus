@@ -9,6 +9,16 @@
 #
 # Notify target: notify.mobile_app_jordans_phone (HA Companion app — the mobile_app_*
 # service; NOT notify.jordans_phone which 500s on rich `data`). Deep-link URL below.
+#
+# ⚠️ Two URL styles here, ON PURPOSE:
+#   • rest_command URLs (analyzer :8091) use the HOSTNAME `tower.lan` — they run FROM
+#     the HA box, which resolves Firewalla local DNS fine, so they survive re-IPs.
+#   • notification clickAction (:8099) uses the RAW IP 192.168.168.21 — the PHONE
+#     (Android/Chrome) does NOT use Firewalla's local DNS, so `tower.lan` fails to
+#     resolve there ("can't reach"). Raw IP is the reliable phone deep-link. If the
+#     Unraid box is ever re-IP'd, update ONLY this clickAction IP (4 spots below).
+# The old raw IP 192.168.50.118 died in the Firewalla rebuild and broke every clickAction
+# ("unknown action"); 192.168.168.21 is the current Unraid IP. Phone must be on-LAN/VPN.
 # =============================================================================
 
 automation:
@@ -57,7 +67,7 @@ automation:
             channel: GlassHaus Alerts
             importance: "{{ 'high' if top.severity == 'problem' else 'default' }}"
             notification_icon: "mdi:alert"
-            clickAction: "http://192.168.50.118:8099/"
+            clickAction: "http://192.168.168.21:8099/"
 
   # ---------------------------------------------------------------------------
   # LLM INSIGHTS — trigger analysis when any tank's derived alerts change; notify
@@ -84,7 +94,7 @@ automation:
     # define rest_command.glasshaus_insight_trigger in configuration.yaml:
     #   rest_command:
     #     glasshaus_insight_trigger:
-    #       url: "http://192.168.50.118:8091/trigger"
+    #       url: "http://tower.lan:8091/trigger"
     #       method: POST
     #       content_type: "application/json"
     #       payload: '{"reason": "{{ reason }}"}'
@@ -116,12 +126,12 @@ automation:
     # define BOTH rest_commands in configuration.yaml:
     #   rest_command:
     #     glasshaus_insight_trigger:
-    #       url: "http://192.168.50.118:8091/trigger"
+    #       url: "http://tower.lan:8091/trigger"
     #       method: POST
     #       content_type: "application/json"
     #       payload: '{"reason": "{{ reason }}"}'
     #     glasshaus_plant_refresh:
-    #       url: "http://192.168.50.118:8091/insights/refresh"
+    #       url: "http://tower.lan:8091/insights/refresh"
     #       method: POST
 
   - id: gh_notify_insight
@@ -151,7 +161,7 @@ automation:
             importance: >
               {{ 'high' if state_attr('sensor.glasshaus_insight','severity')=='problem' else 'default' }}
             notification_icon: "mdi:brain"
-            clickAction: "http://192.168.50.118:8099/"
+            clickAction: "http://192.168.168.21:8099/"
 
   # ---------------------------------------------------------------------------
   # OBSERVABILITY — plant/component health → phone. The programs container writes
@@ -191,7 +201,7 @@ automation:
             channel: GlassHaus Health
             importance: "{{ 'high' if top.severity == 'critical' else 'default' }}"
             notification_icon: "mdi:heart-pulse"
-            clickAction: "http://192.168.50.118:8099/"
+            clickAction: "http://192.168.168.21:8099/"
 
   # ---------------------------------------------------------------------------
   # CONTAINER LIVENESS — a dead programs container can't report its own death, so
@@ -229,4 +239,4 @@ automation:
             channel: GlassHaus Health
             importance: high
             notification_icon: "mdi:heart-broken"
-            clickAction: "http://192.168.50.118:8099/"
+            clickAction: "http://192.168.168.21:8099/"

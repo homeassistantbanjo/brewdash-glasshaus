@@ -1,31 +1,53 @@
+import { useEffect, useState } from 'react';
 import { Sparkline } from './Sparkline';
 import { theme, hexA } from '../theme/tokens';
 import { useActiveBatches } from '../hooks/useBrewery';
+import { BREWFATHER_URL } from '../config';
 
 /**
- * A dedicated, roomy charts dashboard — the home for big trend graphs that the
- * dense overview cards can't fit (alert rows there steal chart height). One
- * column per fermenting tank; each shows a large gravity curve + beer-temp curve
- * with axes/labels room. Non-fermenting tanks are skipped (nothing to plot).
+ * Dedicated, roomy charts dashboard. Reads gravity + beer-temp history from OUR
+ * VictoriaMetrics (via the brewfather sidecar's /series/:tank proxy) rather than
+ * Brewfather's batch.history — VM is complete + every-tick + always available, whereas
+ * Brewfather returned empty history for active batches (only one tank would graph). One
+ * column per tank that has a batch. Titles are "Tank N - Beer".
  */
+interface Series { gravity: { t: number; v: number }[]; temp: { t: number; v: number }[] }
+
 export function GraphsView() {
   const { tanks, batches } = useActiveBatches();
+  const [series, setSeries] = useState<Record<string, Series>>({});
 
-  // Plot ANY tank with a batch that has a gravity/temp curve — not just tanks whose
-  // status is literally Fermenting. A conditioning batch still has its full
-  // fermentation history worth graphing, and its tank may read Conditioning rather
-  // than Fermenting. Batch-with-history is the real "is there something to plot".
-  const plottable = tanks
+  // tanks that currently hold a batch — these are what we graph (VM has their history)
+  const withBatch = tanks
     .map((tank, i) => ({ tank, batch: batches[i] }))
-    .filter(({ batch }) => batch && batch.history.length >= 2);
+    .filter(({ batch }) => batch != null);
 
-  if (plottable.length === 0) {
+  // fetch each tank's VM series (poll every 60s — ferment moves slowly)
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const out: Record<string, Series> = {};
+      await Promise.all(withBatch.map(async ({ tank }) => {
+        try {
+          const r = await fetch(`${BREWFATHER_URL}/series/${encodeURIComponent(tank.id)}`, { signal: AbortSignal.timeout(9000) });
+          if (r.ok) out[tank.id] = await r.json();
+        } catch { /* leave prior */ }
+      }));
+      if (!cancelled) setSeries((prev) => ({ ...prev, ...out }));
+    };
+    load();
+    const t = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [withBatch.map((x) => x.tank.id).join(',')]);
+
+  if (withBatch.length === 0) {
     return (
       <div style={{
         flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontFamily: theme.font.mono, fontSize: 14, color: theme.color.textDim,
       }}>
-        No batches with gravity history to graph.
+        No tanks with an assigned batch to graph.
       </div>
     );
   }
@@ -34,13 +56,16 @@ export function GraphsView() {
     <div style={{
       flex: 1, minHeight: 0,
       display: 'grid',
-      gridTemplateColumns: `repeat(${plottable.length}, 1fr)`,
+      gridTemplateColumns: `repeat(${withBatch.length}, 1fr)`,
       gap: 12,
     }}>
-      {plottable.map(({ tank, batch }) => {
+      {withBatch.map(({ tank, batch }) => {
         const b = batch!;
-        const sg = b.history.map((r) => r.sg);
-        const temp = b.history.map((r) => r.tempF);
+        const vm = series[tank.id];
+        // prefer VM series; fall back to Brewfather batch.history if VM hasn't loaded yet
+        const sg = vm?.gravity?.length ? vm.gravity.map((p) => p.v) : b.history.map((r) => r.sg);
+        const temp = vm?.temp?.length ? vm.temp.map((p) => p.v) : b.history.map((r) => r.tempF);
+        const title = `${tank.label} - ${b.name}`;   // "Tank 3 - Piwo Grodziskie"
         return (
           <div key={tank.id} style={{
             background: theme.color.panelHi,
@@ -50,12 +75,13 @@ export function GraphsView() {
             padding: 16,
             display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0,
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexShrink: 0 }}>
-              <span style={{ fontFamily: theme.font.mono, fontSize: 15, fontWeight: 700, color: theme.color.text }}>
-                {tank.label}
-              </span>
-              <span style={{ fontFamily: theme.font.mono, fontSize: 11, color: theme.color.textDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {b.name} · DAY {b.daysFermenting?.toFixed(1) ?? '—'}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexShrink: 0, gap: 8 }}>
+              <span style={{
+                fontFamily: theme.font.mono, fontSize: 14, fontWeight: 700, color: theme.color.text,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>{title}</span>
+              <span style={{ fontFamily: theme.font.mono, fontSize: 11, color: theme.color.textDim, flexShrink: 0 }}>
+                DAY {b.daysFermenting?.toFixed(1) ?? '—'}{!sg.length ? ' · no data yet' : ''}
               </span>
             </div>
 

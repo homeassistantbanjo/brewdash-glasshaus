@@ -48,6 +48,23 @@ input_select:
     <<: *tilt_opts
     name: Tank 3 Tilt
 
+  # TEMP CONTROL SOURCE — which sensor the programs runner drives the setpoint off.
+  #   Probe (default): command the setpoint straight (ITC-308 holds its thermowell probe).
+  #   Tilt: shallow-fill correction — the runner shifts the commanded setpoint by
+  #     (probe − Tilt) so the ITC-308 holds the BEER (Tilt, floating in the liquid) at the
+  #     program's intended temp, not a barely-submerged probe. Guarded: only applies when
+  #     the Tilt is fresh + the offset is within ±4°F; else falls back to Probe.
+  tank_1_temp_source: &tsrc
+    name: Tank 1 Temp Source
+    icon: mdi:thermometer-check
+    options: ["Probe", "Tilt"]
+  tank_2_temp_source:
+    <<: *tsrc
+    name: Tank 2 Temp Source
+  tank_3_temp_source:
+    <<: *tsrc
+    name: Tank 3 Temp Source
+
   # NOTE: tank_N_batch is NOT an input_select — see input_text below. A package
   # input_select re-asserts its hardcoded `options:` on every HA restart, which
   # forced the saved selection to reset when the selected batch wasn't in that
@@ -70,7 +87,37 @@ input_text:
     <<: *batch_txt
     name: Tank 3 Batch
 
+  # Tilt-control status note, written by the runner. Empty in normal Tilt/Probe control;
+  # set to "held: …" / "decaying: …" when the Tilt goes unresponsive in Tilt mode so the
+  # health platform + app can WARN you (the beer-safety failure the brewer flagged).
+  tank_1_temp_ctl_note: &tcn
+    name: Tank 1 Temp Ctl Note
+    icon: mdi:thermometer-alert
+    max: 80
+  tank_2_temp_ctl_note:
+    <<: *tcn
+    name: Tank 2 Temp Ctl Note
+  tank_3_temp_ctl_note:
+    <<: *tcn
+    name: Tank 3 Temp Ctl Note
+
 input_number:
+  # Persisted Tilt-vs-probe offset (°F) per tank — the runner's last-good compensation.
+  # Survives HA/container restarts + rides through Tilt gaps so control never snaps.
+  tank_1_temp_offset: &toff
+    name: Tank 1 Temp Offset
+    icon: mdi:thermometer-lines
+    min: -6
+    max: 6
+    step: 0.1
+    mode: box
+  tank_2_temp_offset:
+    <<: *toff
+    name: Tank 2 Temp Offset
+  tank_3_temp_offset:
+    <<: *toff
+    name: Tank 3 Temp Offset
+
   tank_1_expected_fg: &fg
     name: Tank 1 Expected FG
     icon: mdi:target

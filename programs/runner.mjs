@@ -13,6 +13,8 @@
 import { PRESETS } from './presets.mjs';
 import { tick, resolveStartPhase } from './statemachine.mjs';
 import { computeDerived, updateStableClock } from './derived.mjs';
+import { writeAllTankMetrics, vmGravitySlopePts, vmLastGravity } from './metrics.mjs';
+import { smoothOffset, slewLimit, beerInBand } from './tiltcomp.mjs';
 import { computeHealth } from './monitor.mjs';
 
 const HA_URL = req('HA_URL');
@@ -188,12 +190,138 @@ async function tickTank(tankId, by) {
 
   if (r.done) { console.log(`[${tankId}] program complete`); return; }
 
+  // ── TILT-COMPENSATED SETPOINT (fail-safe against Tilt loss) ────────────────
+  // The ITC-308 controls off ITS thermowell probe. On a shallow fill the probe reads
+  // off vs the actual beer (the Tilt, floating IN the liquid, is truer). In 'Tilt'
+  // mode we shift the commanded setpoint by (probe − tilt) so the 308 holds the BEER
+  // at target. E.g. want 68°F, probe 2°F below Tilt → command 70°F.
+  //
+  // THE FAILURE MODE THIS GUARDS: if the Tilt goes unresponsive/flaps (Black does),
+  // naively snapping back to the raw probe setpoint would OVERSHOOT the beer (the probe
+  // was reading cold) AND oscillate on every flap. So instead the offset is a slow,
+  // persisted value that RIDES THROUGH outages:
+  //   • Tilt fresh          → recompute offset, persist it (input_number.tank_N_temp_offset).
+  //   • Tilt lost < GRACE    → HOLD the last-good offset (flap-proof; beer barely drifts).
+  //   • Tilt lost > GRACE    → DECAY the held offset toward 0 over DECAY_H, and flag it,
+  //                            so control returns to the probe GRADUALLY, never a snap.
+  //   • never had an offset  → plain probe (no harm).
+  const OFFSET_CAP_F = 7;          // hard clamp on the applied offset. Raised 4→7: the real
+                                  // probe-vs-beer stratification gap measured ~5-6°F (Thermapen
+                                  // vs thermowell), so ±4 under-corrected. ±7 lets the live
+                                  // self-calibrating (probe−Tilt) offset fully apply while still
+                                  // bounding a bad reading from running cooling away.
+  const GRACE_MIN = 45;            // Tilt may vanish this long with NO change (flap-proof)
+  const DECAY_H = 4;               // after grace, unwind the held offset to 0 over this long
+  // SMOOTHING (anti-hunting): the probe is fast+noisy, the Tilt is slow+lagged, so the raw
+  // per-tick offset jitters and makes the ITC-308 chase itself. EMA-smooth the offset + slew-
+  // limit the setpoint. Both damping-only (can't run the beer away). Env-tunable.
+  const EMA_ALPHA = Math.min(1, Math.max(0.05, Number(process.env.TILT_EMA_ALPHA || 0.3)));  // small = smoother
+  const MAX_SLEW_F = Math.max(0.1, Number(process.env.TILT_MAX_SLEW_F || 0.5));              // °F/tick cap
+  // TARGET DEADBAND: when the beer is within ±BAND_F of target, FREEZE the offset (stop chasing)
+  // — this is what actually kills the ±2°F limit cycle. Wider band = calmer but looser hold.
+  const BAND_F = Math.max(0.2, Number(process.env.TILT_DEADBAND_F || 0.6));
+  // FAR-OFF threshold: beyond ±FAR_OFF_F from target, correct at FULL strength (raw offset, no
+  // EMA/slew throttle) so a real error (beer stuck 2°F cold) recovers fast instead of crawling.
+  const FAR_OFF_F = Math.max(BAND_F + 0.3, Number(process.env.TILT_FAR_OFF_F || 1.5));
+  let commandF = r.setpointF;
+  let tiltCtl = 'probe';           // for the status entity: probe | tilt | held | decaying
+  const tempSource = (s(`input_select.${tankId}_temp_source`) || 'Probe');
+  if (commandF != null && /tilt/i.test(tempSource)) {
+    const probeF = numOr(s(`sensor.${tankId}_probe_temp`));
+    const tiltF = ci.beerTempF ?? null;
+    const tiltAgeMin = ci.beerTempAgeMin ?? null;
+    const tiltFresh = tiltF != null && (tiltAgeMin == null || tiltAgeMin <= 30);
+    const prevOffset = numOr(s(`input_number.${tankId}_temp_offset`));  // persisted last-good
+    const clamp = (o) => Math.max(-OFFSET_CAP_F, Math.min(OFFSET_CAP_F, o));
+
+    let offset = null;
+    let farOff = false;   // beer is meaningfully off target → correct FAST (no damping throttle)
+    if (probeF != null && tiltF != null && tiltFresh) {
+      // ASYMMETRIC control by how far the beer is from target — damping must NOT throttle a real
+      // recovery (the bug: beer stuck at 64 wanting 66 while EMA+slew let the setpoint only crawl
+      // up 0.2°/tick). Three regimes:
+      //   • IN-BAND (|beer−target| ≤ BAND_F):   FREEZE offset — kills the lagged-feedback swing.
+      //   • NEAR    (BAND_F < err ≤ FAR_OFF_F): EMA-smooth + slew — gentle, damped correction.
+      //   • FAR     (err > FAR_OFF_F):          use RAW offset, NO slew cap — get the beer back now.
+      const targetF = r.setpointF;                       // the program's intended BEER temp
+      const err = Math.abs(tiltF - targetF);
+      const raw = clamp(probeF - tiltF);
+      if (beerInBand(tiltF, targetF, BAND_F) && prevOffset != null) {
+        offset = clamp(prevOffset);                      // hold — do NOT chase
+        tiltCtl = 'tilt';
+        console.log(`[${tankId}] beer ${tiltF} within ±${BAND_F} of target ${targetF} — HOLDING offset ${offset.toFixed(2)} (no chase)`);
+      } else if (err > FAR_OFF_F || prevOffset == null) {
+        // FAR from target → apply the full raw offset immediately; don't EMA-throttle a real error.
+        offset = raw;
+        farOff = true;
+        tiltCtl = 'tilt';
+        console.log(`[${tankId}] beer ${tiltF} FAR off target ${targetF} (err ${err.toFixed(1)}>${FAR_OFF_F}) — FULL correct: offset=${offset.toFixed(2)} (no EMA/slew)`);
+      } else {
+        // NEAR (just outside band) → gentle EMA-smoothed correction + slew (below).
+        offset = clamp(smoothOffset(raw, prevOffset, EMA_ALPHA));
+        tiltCtl = 'tilt';
+        console.log(`[${tankId}] beer ${tiltF} near-target ${targetF} (err ${err.toFixed(1)}) — gentle correct: raw=${raw.toFixed(1)} ema=${offset.toFixed(2)}`);
+      }
+      // persist the offset (survives restarts + Tilt gaps). Only write past the deadband so we
+      // don't bump the helper every tick for sub-0.1° drift.
+      if (!DRY_RUN && (prevOffset == null || Math.abs(offset - prevOffset) >= 0.1)) {
+        await callService('input_number', 'set_value',
+          { entity_id: `input_number.${tankId}_temp_offset`, value: Math.round(offset * 10) / 10 });
+      }
+    } else if (prevOffset != null) {
+      // Tilt not usable → decide HOLD vs DECAY based on how long it's been gone.
+      const gapMin = tiltAgeMin ?? 9999;
+      if (gapMin <= GRACE_MIN) {
+        offset = clamp(prevOffset); tiltCtl = 'held';
+        console.warn(`[${tankId}] Tilt stale ${Math.round(gapMin)}m (<${GRACE_MIN}m grace) — HOLDING offset ${offset.toFixed(1)}°F`);
+      } else {
+        // linear decay of the held offset toward 0 over DECAY_H past the grace window
+        const past = (gapMin - GRACE_MIN) / 60;            // hours past grace
+        const f = Math.max(0, 1 - past / DECAY_H);
+        offset = clamp(prevOffset * f); tiltCtl = 'decaying';
+        console.warn(`[${tankId}] ⚠ Tilt lost ${Math.round(gapMin)}m — DECAYING offset ${prevOffset.toFixed(1)}→${offset.toFixed(1)}°F (reverting to probe over ${DECAY_H}h)`);
+        if (Math.abs(offset) < 0.1 && !DRY_RUN) {
+          await callService('input_number', 'set_value', { entity_id: `input_number.${tankId}_temp_offset`, value: 0 });
+        }
+      }
+    } else {
+      console.log(`[${tankId}] temp_source=Tilt but no Tilt + no saved offset → plain probe ${r.setpointF}°F`);
+    }
+
+    if (offset != null && Math.abs(offset) >= 0.05) {
+      const compensated = r.setpointF + offset;
+      const clamped = program.clamp
+        ? Math.max(program.clamp.minF, Math.min(program.clamp.maxF, compensated)) : compensated;
+      // SLEW-LIMIT the commanded setpoint (NEAR-target only): the beer can't track a big instant
+      // jump, so cap per-tick change to MAX_SLEW_F — ramps gently, no compressor slam/overshoot.
+      // BUT when the beer is FAR off target, DON'T slew-throttle the recovery — command the full
+      // correction now (the bug this fixes: beer stuck 2°F cold while the setpoint only crawled up).
+      commandF = farOff ? clamped : slewLimit(clamped, currentSetpointF, MAX_SLEW_F);
+      console.log(`[${tankId}] tilt-ctl(${tiltCtl}): probe=${probeF} tilt=${tiltF} off=${offset.toFixed(2)} → target ${r.setpointF}→ want ${clamped.toFixed(1)} → cmd ${commandF.toFixed(1)}°F${farOff ? ' [FAR — full]' : ` (slew ${MAX_SLEW_F}/tick)`}`);
+    }
+  }
+
+  // surface the tilt-control MODE so the app + health notify can show/warn on it. 'held'
+  // and 'decaying' mean the Tilt is unresponsive while this tank is in Tilt mode — the
+  // very failure you flagged. 'decaying' publishes an ATTR the health platform pages on.
+  tempCtlMode.set(tankId, tiltCtl);
+  if (!DRY_RUN && (tiltCtl === 'held' || tiltCtl === 'decaying')) {
+    // write a small flag entity so glasshaus_health can raise a warning ("Tank N: Tilt lost,
+    // temp control holding/reverting to probe") — you find out BEFORE the beer drifts.
+    await callService('input_text', 'set_value',
+      { entity_id: `input_text.${tankId}_temp_ctl_note`,
+        value: `${tiltCtl}: Tilt unresponsive, ${tiltCtl === 'held' ? 'holding offset' : 'reverting to probe'}` })
+      .catch(() => {});
+  } else if (!DRY_RUN && tiltCtl === 'tilt') {
+    await callService('input_text', 'set_value', { entity_id: `input_text.${tankId}_temp_ctl_note`, value: '' }).catch(() => {});
+  }
+
   // write the setpoint if it changed meaningfully (and not dry-run)
-  if (r.setpointF != null && (currentSetpointF == null || Math.abs(r.setpointF - currentSetpointF) >= 0.1)) {
-    console.log(`[${tankId}] setpoint ${currentSetpointF}→${r.setpointF}°F (${r.note})${DRY_RUN ? ' [DRY_RUN]' : ''}`);
+  if (commandF != null && (currentSetpointF == null || Math.abs(commandF - currentSetpointF) >= 0.1)) {
+    console.log(`[${tankId}] setpoint ${currentSetpointF}→${commandF}°F (${r.note})${DRY_RUN ? ' [DRY_RUN]' : ''}`);
     if (!DRY_RUN) {
       await callService('number', 'set_value',
-        { entity_id: `number.${tankId}_setpoint_raw`, value: Math.round(r.setpointF * 10) });
+        { entity_id: `number.${tankId}_setpoint_raw`, value: Math.round(commandF * 10) });
     }
   }
 
@@ -327,6 +455,8 @@ const latchState = new Map();   // tankId → { batchKey, latched } one-shot fer
 // control uses ITS OWN resolved gravity/og/attenuation (same values deriveTank
 // already computes), so multi-tank control is correct and testable in isolation.
 const controlInputs = new Map();   // tankId → { gravity, og, expectedFg, attenuationPct, progressToFgPct, delta, gravityStale }
+const metricPoints = new Map();    // tankId → { tankId, tags, fields } for the per-tick VM write
+const tempCtlMode = new Map();     // tankId → 'probe'|'tilt'|'held'|'decaying' (tilt-comp status)
 
 // resolve a tank's live gravity/temp from its ASSIGNED Tilt color (generic — any color)
 function tiltData(by, tiltColor) {
@@ -354,6 +484,17 @@ function roll8hMax(tankId, sg) {
   return Math.max(...last8h.map((x) => x.sg));
 }
 
+// READ the current 8h peak WITHOUT pushing a sample — used during a held-gravity tick so
+// a repeated last-good value can't create a phantom new peak. Falls back to the held value
+// itself if the window is empty (fresh process during a dropout), so drop-from-peak is 0
+// rather than null (honest: "no drop observed since we last had a live reading").
+function peekRoll8hMax(tankId, fallbackSg) {
+  const now = Date.now();
+  const buf = (gravWindow.get(tankId) || []).filter((x) => x.t >= now - 8 * 3600_000);
+  if (!buf.length) return fallbackSg ?? null;
+  return Math.max(...buf.map((x) => x.sg));
+}
+
 // Self-computed 24h gravity slope in POINTS/day from the runner's own window —
 // a fallback for when the HA statistics sensor is missing/stale (e.g. reads a
 // truncated -0.0, or the per-color stat entity doesn't exist). Needs samples
@@ -374,6 +515,23 @@ async function deriveTank(tankId, by) {
 
   const tiltSel = s(`input_select.${tankId}_tilt`);
   const { gravity, tempF, ageMin } = tiltData(by, tiltSel);
+
+  // ── DISPLAY-ONLY last-good gravity HOLD (weak-BLE flap mitigation) ──────────
+  // Orange (tank_3) has a marginal signal (~RSSI -81) and drops out for stretches.
+  // When that happens the live `gravity` is null/stale, so every derived metric that
+  // needs a CURRENT gravity (attenuation, drop-from-peak, progress) blanks and the
+  // card looks broken — even though we KNOW roughly where the beer is. So for the
+  // DISPLAY derivation only, hold the last-good gravity from VM (≤ HOLD_MAX_MIN old).
+  // CONTROL never sees this — it keeps the strict `gravityStale` gate below — and
+  // METRICS still write only the real live reading (never the held value), so the
+  // stored curve stays honest. The card shows the held value flagged as `gravityHeld`.
+  const HOLD_MAX_MIN = 120;                    // hold up to 2h; older than that, honestly blank
+  const gravityLive = gravity != null && (ageMin == null || ageMin <= 20);
+  let dispGravity = gravity, dispGravityAgeMin = ageMin, gravityHeld = false;
+  if (!gravityLive) {
+    const held = await vmLastGravity(tankId, HOLD_MAX_MIN).catch(() => null);
+    if (held) { dispGravity = held.sg; dispGravityAgeMin = held.ageMin; gravityHeld = true; }
+  }
   // batch is now the Brewfather batch NUMBER stored as free text (input_text).
   // Treat empty / 'None' / 'unknown' (HA's default initial input_text value) as
   // unassigned. Match by number first, then name (back-compat with any old value).
@@ -394,7 +552,13 @@ async function deriveTank(tankId, by) {
   const fermentingStartMs = batch?.fermentingStart ? Date.parse(batch.fermentingStart)
     : (facts?.fermentingStart != null ? facts.fermentingStart : null);
 
-  const gravity8hMaxSg = roll8hMax(tankId, gravity); // (also fills the 24h window)
+  // Feed the DISPLAY gravity (live, or the held last-good) into the 8h-peak window so
+  // drop-from-peak keeps computing through a dropout. The window only ADVANCES on live
+  // readings (a repeated held value can't create a fake new peak); when held, we read the
+  // existing peak without pushing a duplicate sample.
+  const gravity8hMaxSg = gravityHeld
+    ? roll8hMax(tankId, null) ?? peekRoll8hMax(tankId, dispGravity)
+    : roll8hMax(tankId, gravity); // live push (also fills the 24h window)
 
   // 24h delta (pts/day), most-trustworthy source first:
   //  1) per-color Tilt stat sensor if it exists (sensor.tilt_<color>_gravity_24h_stat)
@@ -402,19 +566,23 @@ async function deriveTank(tankId, by) {
   //  3) the runner's OWN window slope — robust to a missing/truncated HA stat
   //     (that "-0.0" bug where the statistics sensor rounds a slow drop to zero).
   const c = tiltSel?.toLowerCase();
-  const statPerColor = num(s(`sensor.tilt_${c}_gravity_24h_stat`));   // SG/day
-  const statLegacy = num(s('sensor.tilt_gravity_24h_stat'));          // SG/day (un-prefixed Black)
-  const deltaLegacy = num(s('sensor.gravity_24h_delta'));             // already pts/day
-  const own = windowSlopePts(tankId);                                 // pts/day, self-computed
-  // Prefer a real HA stat reading; a value of 0/-0 is LEGITIMATE (a terminal beer's
-  // 24h change genuinely IS ~0 — that's the "flat" signal, not a bug). Only treat a
-  // NULL/missing source as untrusted. Fall back to the self-computed window slope
-  // ONLY when every HA source is absent AND we have enough of our own samples.
+  const statPerColor = num(s(`sensor.tilt_${c}_gravity_24h_stat`));   // SG/day, THIS color
+  const statLegacy = num(s('sensor.tilt_gravity_24h_stat'));          // SG/day (un-prefixed = BLACK)
+  const deltaLegacy = num(s('sensor.gravity_24h_delta'));             // already pts/day (BLACK)
+  const own = windowSlopePts(tankId);                                 // pts/day, in-memory window
+  // Delta source, most-trustworthy first. CRITICAL: the legacy un-prefixed sensors are the
+  // BLACK Tilt's — they must ONLY be used when THIS tank IS Black. A non-Black tank (e.g.
+  // Orange on tank_3) with no per-color stat was borrowing Black's delta → wrong velocity.
+  // For non-Black, skip the legacy sensors and use our OWN per-tank slope. And when the
+  // IN-MEMORY window is too short (wiped on every container restart — why tank_3 velocity was
+  // null), fall back to the DURABLE slope from VictoriaMetrics history (survives restarts).
+  const isBlack = c === 'black';
   let delta;
-  if (statPerColor != null) delta = statPerColor * 1000;
-  else if (statLegacy != null) delta = statLegacy * 1000;
-  else if (deltaLegacy != null) delta = deltaLegacy;
-  else delta = own;
+  if (statPerColor != null) delta = statPerColor * 1000;              // this color's own stat
+  else if (isBlack && statLegacy != null) delta = statLegacy * 1000;  // legacy = Black only
+  else if (isBlack && deltaLegacy != null) delta = deltaLegacy;       // legacy = Black only
+  else if (own != null) delta = own;                                  // per-tank in-memory slope
+  else delta = await vmGravitySlopePts(tankId).catch(() => null);     // durable VM history slope
   // normalize -0 → 0 so downstream |delta|<1 flat-checks read cleanly
   if (delta === 0) delta = 0;
 
@@ -461,15 +629,27 @@ async function deriveTank(tankId, by) {
   const inCrash = prog?.phases?.[phIdx]?.kind === 'coldCrash';
 
   const d = computeDerived({
-    gravity, og,
+    // DISPLAY gravity: live when fresh, else the VM-held last-good (weak-BLE hold). Keeps
+    // attenuation/drop/progress populated through an Orange dropout instead of blanking.
+    gravity: dispGravity, og,
     expectedFg: num(s(`input_number.${tankId}_expected_fg`)),
     beerTempF: tempF,
     probeTempF: num(s(`sensor.${tankId}_probe_temp`)),
     setpointF: num(s(`sensor.${tankId}_setpoint`)),
     gravity24hDeltaPts: delta,
     gravity8hMaxSg,
-    gravityAgeMin: ageMin,
+    gravityAgeMin: dispGravityAgeMin,
+    // TRUE live-signal age (independent of the display hold) so the "TILT SIGNAL LOST"
+    // warning still fires honestly when the Tilt is actually flapping — the hold keeps the
+    // NUMBERS on-screen, but we still tell you the signal dropped.
+    liveGravityAgeMin: ageMin,
+    gravityHeld,
     daysFermenting: fermentingStartMs ? (Date.now() - fermentingStartMs) / 86_400_000 : null,
+    // min elapsed hours before velocity/ETA are trustworthy (early-batch suppression). Env override.
+    minVelocityHours: Number(process.env.MIN_VELOCITY_HOURS || 12),
+    // physical ceiling for gravity velocity (pts/day) — rejects garbage HA-stat rates on fresh
+    // batches (e.g. -120 pts/day). No real ferment exceeds ~20 pts/day even at peak.
+    maxVelocityPtsPerDay: Number(process.env.MAX_VELOCITY_PTS || 20),
     prevLatched,
     stableSinceMs: st.stableSinceMs,
     dryHopped,
@@ -498,6 +678,38 @@ async function deriveTank(tankId, by) {
     progressToFgPct: d.progressToFgPct ?? null,
     delta,
     gravityStale: gravity == null || (ageMin != null && ageMin > 20) || d.gravitySuspect,
+    // Tilt beer temp + freshness — for the tilt-compensated setpoint (tickTank). ageMin is
+    // the gravity sensor's age, a good proxy for whether the Tilt is broadcasting at all.
+    beerTempF: tempF ?? null,
+    beerTempAgeMin: ageMin,
+  });
+
+  // METRICS: stash this tank's full point for the durable VM write (done once per tick,
+  // after all tanks derive). Only tanks WITH a batch (og present) produce ferment metrics;
+  // a batchless tank still logs its probe/setpoint under a batch="" tag so temp history
+  // exists even between brews. Suspect gravity is omitted (don't poison the curve with a
+  // fallen-Tilt reading). Labeled by batch so you can query one beer across its whole life.
+  const batchTag = s(`input_text.${tankId}_batch`) || '';
+  metricPoints.set(tankId, {
+    tankId,
+    tags: { batch: batchTag, tilt: (s(`input_select.${tankId}_tilt`) || '').toLowerCase(),
+      status: s(`input_select.${tankId}_status`) || '' },
+    fields: {
+      ...(!d.gravitySuspect && gravity != null ? { gravity } : {}),
+      ...(og != null ? { og } : {}),
+      ...(num(s(`input_number.${tankId}_expected_fg`)) != null ? { expected_fg: num(s(`input_number.${tankId}_expected_fg`)) } : {}),
+      ...(tempF != null ? { beer_temp_f: tempF } : {}),
+      ...(num(s(`sensor.${tankId}_probe_temp`)) != null ? { probe_temp_f: num(s(`sensor.${tankId}_probe_temp`)) } : {}),
+      ...(num(s(`sensor.${tankId}_setpoint`)) != null ? { setpoint_f: num(s(`sensor.${tankId}_setpoint`)) } : {}),
+      // gravity-DERIVED fields are omitted while the display gravity is HELD (Tilt dropout) —
+      // storing them would poison the durable curve with non-live duplicates. Only real,
+      // live-gravity ticks write attenuation/progress/drop. Temp/setpoint always write.
+      ...(!gravityHeld && d.attenuationPct != null ? { attenuation_pct: d.attenuationPct } : {}),
+      ...(!gravityHeld && d.progressToFgPct != null ? { progress_to_fg_pct: d.progressToFgPct } : {}),
+      ...(d.abv != null ? { abv: d.abv } : {}),
+      ...(!gravityHeld && d.dropFromPeakPts != null ? { drop_from_peak_pts: d.dropFromPeakPts } : {}),
+      ...(delta != null ? { gravity_24h_delta_pts: delta } : {}),
+    },
   });
 
   // maintain state, and PERSIST any change to the HA helpers (survives reboots).
@@ -611,6 +823,14 @@ async function tickAll() {
     }
     // GENERIC derived + alerts for every tank (read-only; separate from control)
     for (const t of TANKS) await deriveTank(t, by).catch((e) => console.error(`[${t}] derive:`, e.message));
+    // DURABLE METRICS: push every tank's point (gravity/temps/setpoint/attenuation/abv) to
+    // VictoriaMetrics so historical ferment data is ours + query-able forever. Best-effort —
+    // never blocks control. One POST per tick (line protocol, batched).
+    try {
+      const pts = TANKS.map((t) => metricPoints.get(t)).filter(Boolean);
+      const ok = await writeAllTankMetrics(pts);
+      if (ok) console.log(`[metrics] wrote ${pts.length} tank point(s) to VM`);
+    } catch (e) { console.error('[metrics] VM write failed:', e.message); }
     // program control (writes setpoints) — unchanged
     for (const t of TANKS) await tickTank(t, by);
     // OBSERVABILITY: plant/component health (infra staleness, disconnects, glycol).

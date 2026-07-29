@@ -1,8 +1,10 @@
 import { useEffect } from 'react';
 import { HassConnect } from '@hakit/core';
 import { Overview } from './components/Overview';
+import { MobileView } from './components/MobileView';
 import { HaStatesProvider } from './data/haStates';
 import { ToastProvider } from './components/Toasts';
+import { useIsMobile } from './hooks/useIsMobile';
 import { theme, hexA, useThemeName, applyBodyBg, fx } from './theme/tokens';
 import { HA_URL, HA_TOKEN } from './config';
 
@@ -12,6 +14,11 @@ export default function App() {
   useThemeName();
   useEffect(() => { applyBodyBg(); }, []);
   const animated = fx().animatedGrid;
+  // Phone-sized viewport → the dedicated MobileView; tablet/desktop → the
+  // untouched kiosk Overview. Both share the providers below, so the data layer
+  // (HA states + brewery hooks) is identical — only the layout differs. Reactive
+  // via matchMedia, so rotating the phone switches live.
+  const isMobile = useIsMobile();
 
   return (
     <div style={{
@@ -19,7 +26,8 @@ export default function App() {
       background: theme.color.bgBase,
       color: theme.color.text,
       fontFamily: theme.font.sans,
-      overflow: 'hidden',
+      // the mobile view scrolls (single column); the kiosk view is fixed-height.
+      overflow: isMobile ? 'visible' : 'hidden',
     }}>
       {/* ambient depth glows (fixed) */}
       <div style={{
@@ -43,7 +51,8 @@ export default function App() {
         <HassConnect hassUrl={HA_URL} hassToken={HA_TOKEN}>
           <HaStatesProvider>
             <ToastProvider>
-              <Overview />
+              {/* phone → dedicated MobileView; tablet/desktop → untouched kiosk Overview */}
+              {isMobile ? <MobileView /> : <Overview />}
             </ToastProvider>
           </HaStatesProvider>
         </HassConnect>

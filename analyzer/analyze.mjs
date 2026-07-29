@@ -202,8 +202,19 @@ DATA LITERACY — critical, do not get these wrong:
 - The gravity source is a Tilt hydrometer: precision is ~±0.001-0.002 SG and it is NOISY.
   Treat any gravity movement smaller than ~0.002 SG as MEASUREMENT NOISE, not a real trend.
   Do NOT call something a "stall" or "plateau" based on wobble between two nearby points
-  (e.g. 1.0116 vs 1.0121) — that is noise, not meaningful. A real stall = gravity genuinely
-  flat (24h delta near 0) while still WELL ABOVE the expected FG.
+  (e.g. 1.0116 vs 1.0121) — that is noise, not meaningful.
+- STALL — do NOT over-diagnose this (it is the most common false alarm here):
+  A real stall requires ALL of: (a) gravity genuinely FLAT (24h delta ≈ 0 over a real window,
+  not two noisy points), AND (b) still WELL above expected FG, AND (c) fermentation has clearly
+  ENGAGED and then STOPPED — i.e. it dropped meaningfully then went flat. A beer that is STILL
+  TRENDING DOWN is BY DEFINITION not stalled, no matter how far above FG it is. Check
+  dropFromPeak_pts and the recent slope: if gravity is still falling (even slowly), it is
+  ACTIVELY FERMENTING — say so, never "stalled."
+- EARLY + LOW-OG is NOT a stall: a low-OG beer (e.g. OG ~1.035) only has ~25-30 points to give,
+  so it can be ACTIVELY fermenting yet read low apparent-attenuation % and still sit "above FG."
+  Being above FG early is normal, not stuck. Only consider stall AFTER fermentation has clearly
+  engaged (real drop from peak / hoursSincePitch well past the lag window) AND then flat-lined.
+  If it dropped a few points in the last day, that is REAL ACTIVITY — report ACTIVE, not stalled.
 - "apparentAttenuationPct" = TRUE attenuation (% of sugars fermented) — this is what
   "attenuation" means to a brewer. "progressToFgPct" = how close to the target FG (a finish-
   line %). NEVER report progressToFgPct as "attenuation". Near the end these diverge (e.g.
@@ -250,6 +261,25 @@ flattening EARLY (before ~70% apparent attenuation = possible high finish / real
 Is temperature holding the setpoint? Any equipment concern? Where in the ferment→D-rest→crash
 →condition→package arc is it, and what's the NEXT step (not skipping ahead to packaging)?
 Otherwise say it's nominal.
+
+LEAD WITH FERMENTATION FACTS, NOT EQUIPMENT NAGS. The brewer wants to know WHERE THE FERMENT
+IS: current gravity + OG→FG, apparent attenuation %, the 24h slope (still dropping? how fast?),
+where in the arc (lag / active / approaching terminal / terminal / conditioning), and the
+projected finish. Put those FACTS in the detail even when severity is "info" — a healthy tank's
+insight should read like "Batch X: 1.020, 62% att, dropping ~6 pts/day, ~2 days to terminal —
+on pace" NOT "nothing wrong." Make the info useful, not empty.
+
+TILT SIGNAL — do NOT nag about it. A Tilt gap (tiltSignalAgeMin high / tiltSignalLost true) is
+NORMAL and NOT actionable: these are weak-BLE hydrometers behind steel tanks, backed by a
+booster receiver + auto-recovery, and gravity is HELD through short gaps. So:
+- NEVER raise severity for a stale/lost Tilt signal on its own. A gap of even an hour is cosmetic.
+- Do NOT put "Tilt signal lost", "check the Tilt", "signal age" etc. in headlines/actions unless
+  the Tilt has been silent for MANY HOURS *and* that's the sole reason gravity is unknown for an
+  active batch — and even then it's at most "watch", never "problem".
+- If gravity data exists (even held/slightly old), IGNORE the signal age entirely and just
+  report the fermentation facts. The reading being a few minutes old changes nothing.
+- Equipment section: only flag REAL equipment problems (glycol short-cycling, a controller off,
+  temp far off setpoint) — not Tilt radio housekeeping.
 
 Only raise severity above "info" for something a brewer would actually act on. Output ONLY
 valid JSON (no markdown, no code fences):

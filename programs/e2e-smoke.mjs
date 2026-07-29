@@ -11,8 +11,8 @@
 
 const HA = (process.env.HA_URL || '').replace(/\/$/, '');
 const TOK = process.env.HA_TOKEN;
-const BF = (process.env.BF_URL || 'http://192.168.50.118:8093').replace(/\/$/, '');
-const ANALYZER = (process.env.ANALYZER_URL || 'http://192.168.50.118:8091').replace(/\/$/, '');
+const BF = (process.env.BF_URL || 'http://tower.lan:8093').replace(/\/$/, '');
+const ANALYZER = (process.env.ANALYZER_URL || 'http://tower.lan:8091').replace(/\/$/, '');
 const TEST_TANK = 'tank_2';                 // safe write bed
 const ALL_TANKS = ['tank_1', 'tank_2', 'tank_3'];
 const TEST_BATCH = '141';                   // Piwo — throwaway

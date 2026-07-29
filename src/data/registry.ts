@@ -79,9 +79,14 @@ export const TANKS: TankConfig[] = [
     label: 'Tank 3',
     probeC: 'sensor.tank_3_probe_temp_c',
     setpointRaw: 'number.tank_3_setpoint_raw',
-    controllerPower: null, // no plug yet
+    // Kasa KP125 plug wired 2026-07-18. NOTE the entity base differs from tanks 1/2:
+    // when the plug was (re)added to HA it registered as `tank_3_temperature_controller`
+    // (not `tank_3_temp_controller_power`), so the id base is different — the energy
+    // sub-entities (_today_s_consumption / _total_consumption) derive from this base via
+    // the _current_consumption replace, and both exist live. Device IP 192.168.57.198.
+    controllerPower: 'sensor.tank_3_temperature_controller_current_consumption',
     // Same as Tank 2: 120W heater + stronger pump → clean wattage separation.
-    // Retune once a plug + observations exist.
+    // Bands copied from Tank 2; retune once real chilling/heating draws are observed.
     controllerBands: { cool: 30, heat: 70 },
     status: 'input_select.tank_3_status',
     cleaned: 'input_datetime.tank_3_last_cleaned',

@@ -1,0 +1,78 @@
+# GlassHaus Tilt BLE proxy — ESP32 aggregated receiver for Tilt hydrometers.
+#
+# WHY: the single Tilt Pi is the reception bottleneck. Black (Tank 2) reports fine, but
+# Orange + Purple (both in Tank 3) have NEVER reliably reached HA through the Pi — marginal
+# RSSI from one radio in one spot. ESP32s running ESPHome bluetooth_proxy fix this: HA
+# aggregates EVERY proxy, so a Tilt heard by ANY node flows to HA, and a node placed 1-2 ft
+# from a tank hears it at ~-40 instead of never. Flash one board per tank cluster.
+#
+# HOW HA USES IT: this is a *transport* — it relays raw BLE advertisements to HA over wifi.
+# HA's Tilt reception happens via either (a) the ESPHome Bluetooth Proxy + HA's built-in
+# Tilt/BLE handling, or (b) an add-on that consumes proxied adverts. The proxy itself needs
+# NO per-color config — it forwards ALL BLE, and HA/your Tilt integration decodes the colors.
+# So one identical YAML works for every board; only the name/location differs (see SUBSTITUTIONS).
+#
+# FLASH: HA → Settings → Add-ons → ESPHome → New device → paste this → Install → plug in via
+# USB the first time (OTA after). Put wifi creds in ESPHome's secrets.yaml (wifi_ssid /
+# wifi_password) — do NOT inline them here.
+#
+# PLACEMENT: node_tank3 goes right at Tank 3 (the problem tank). Add node_tank2, node_hlt,
+# etc. by copying this file and changing the three substitutions. More nodes = more coverage;
+# HA dedupes and takes the strongest RSSI per device automatically.
+
+substitutions:
+  node_name: tilt-proxy-tank3          # unique per board (hostname + HA device name)
+  friendly: "Tilt Proxy — Tank 3"
+  # IoT VLAN: these live on 192.168.57.x with the other brew gear. Static optional; DHCP
+  # reservation on the Firewalla is cleaner. Leave wifi on DHCP unless you reserve.
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly}
+
+esp32:
+  board: esp32dev                      # generic ESP32 dev board; change if you buy a specific one
+  framework:
+    type: esp-idf                      # esp-idf gives the most stable/complete BLE proxy
+
+# --- connectivity ---------------------------------------------------------------
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # keep it on the IoT VLAN's SSID (Saltybrook-IoT) so it sits with the brew gear
+  ap:                                  # fallback hotspot if wifi fails (first-boot setup)
+    ssid: "${node_name} setup"
+
+logger:
+api:                                   # native HA API — this is how HA discovers + ingests it
+  reboot_timeout: 15min                # if HA is unreachable 15min, reboot (self-heal a wedged proxy)
+ota:
+  platform: esphome
+
+# --- the actual job: relay ALL BLE adverts to HA ------------------------------
+esp32_ble_tracker:
+  scan_parameters:
+    active: false                      # Tilts BROADCAST (passive) — active scan wastes power + can miss them
+    interval: 320ms
+    window: 300ms                      # near-continuous listening so a rare Tilt advert isn't missed
+
+bluetooth_proxy:
+  active: false                        # passive: forward advertisements only (Tilts don't need connections)
+
+# --- health/observability so YOU know if a proxy goes deaf --------------------
+# These surface in HA so a dead/deaf proxy is visible instead of silently blacking out a tank
+# (the exact failure mode we're trying to end). Watch these in HausWatch/Kuma.
+sensor:
+  - platform: wifi_signal
+    name: "${friendly} WiFi RSSI"
+    update_interval: 60s
+  - platform: uptime
+    name: "${friendly} Uptime"
+
+binary_sensor:
+  - platform: status
+    name: "${friendly} Status"         # on/off = proxy reachable; alert if it flips off
+
+text_sensor:
+  - platform: version
+    name: "${friendly} ESPHome Version"

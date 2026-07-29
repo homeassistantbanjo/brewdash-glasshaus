@@ -51,13 +51,20 @@ export const HA_STATES_BASE = HA_WRITE_BASE;
 
 // The analyzer container's HTTP API (full-plant Insights view). Same host as the
 // dashboard is served from, port 8091, unless overridden at runtime/build time.
+//
+// ⚠️ These three are BROWSER-facing (the phone/kiosk fetches them directly), so the
+// default is the Unraid RAW IP — NOT tower.lan. Phones (Android/Chrome) don't use
+// Firewalla's local DNS, so `.lan` names fail to resolve client-side (verified). The
+// runtime override (VITE_*_URL in the container env) should also be a raw IP for the
+// same reason. Old default was 192.168.50.118 (dead post-Firewalla) — that silently
+// broke the Conditioning-batch fallback fetch, so a conditioning tank showed "no beer".
 export const ANALYZER_URL =
-  runtime.analyzerUrl || import.meta.env.VITE_ANALYZER_URL || 'http://192.168.50.118:8091';
+  runtime.analyzerUrl || import.meta.env.VITE_ANALYZER_URL || 'http://192.168.168.21:8091';
 
 // The Brewfather write service container (brew-day measurement write-back), :8093.
 export const BREWFATHER_URL =
-  runtime.brewfatherUrl || import.meta.env.VITE_BREWFATHER_URL || 'http://192.168.50.118:8093';
+  runtime.brewfatherUrl || import.meta.env.VITE_BREWFATHER_URL || 'http://192.168.168.21:8093';
 
 // The keg-management service (fleet registry, tap lines, QR pages), :8097.
 export const KEGS_URL =
-  runtime.kegsUrl || import.meta.env.VITE_KEGS_URL || 'http://192.168.50.118:8097';
+  runtime.kegsUrl || import.meta.env.VITE_KEGS_URL || 'http://192.168.168.21:8097';

@@ -39,6 +39,10 @@ async function trigger(reason) {
 // full-plant: force=true runs live (Refresh button); otherwise a min-interval guard
 // coalesces bursts. Returns the (possibly cached) full analysis either way.
 const PLANT_MIN_SEC = Number(process.env.PLANT_MIN_INTERVAL_SEC || 30);
+// Cache older than this (sec) is considered STALE → regenerate on /insights open instead of
+// serving it. Default 10min: fresh enough that you never read hours-old findings, but not so
+// tight that every open burns a Claude call (PLANT_MIN_SEC still coalesces rapid opens).
+const INSIGHTS_TTL_SEC = Number(process.env.INSIGHTS_TTL_SEC || 600);
 async function runPlantGuarded(reason, force) {
   const now = Date.now();
   if (plantRunning) return getCachedPlant();
@@ -84,7 +88,13 @@ createServer((req, res) => {
     (async () => {
       try {
         let result = getCachedPlant();
-        if (wantsRefresh || !result) result = await runPlantGuarded(wantsRefresh ? 'refresh' : 'view', wantsRefresh);
+        // STALENESS GUARD: don't serve an old cached analysis as if it's current — if the
+        // cache is older than INSIGHTS_TTL, regenerate on open (this is why insights showed
+        // hours-old tilt complaints from before hardware was fixed). Fresh-on-view.
+        const ageSec = result?.generatedAt ? (Date.now() - Date.parse(result.generatedAt)) / 1000 : Infinity;
+        const stale = ageSec > INSIGHTS_TTL_SEC;
+        if (wantsRefresh || !result || stale)
+          result = await runPlantGuarded(wantsRefresh ? 'refresh' : (stale ? 'stale-refresh' : 'view'), wantsRefresh || stale);
         sendJson(res, 200, result || { plantSummary: null, tanks: [], equipment: null });
       } catch (e) {
         sendJson(res, 500, { error: e.message });

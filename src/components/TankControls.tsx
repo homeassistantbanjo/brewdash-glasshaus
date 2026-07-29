@@ -4,6 +4,7 @@ import { theme, hexA, stateColor } from '../theme/tokens';
 import { useBreweryActions } from '../hooks/useBreweryActions';
 import { useAssignableBatches } from '../hooks/useBrewery';
 import { FermPlanEditor } from './FermPlanEditor';
+import { KegBatchModal } from './KegBatchModal';
 import { Tank } from '../types/domain';
 
 // Fallbacks used ONLY until the helper's live options resolve. The real option
@@ -43,6 +44,7 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
   const curStatus = useStateOf(`input_select.${tank.id}_status`);
   const curTilt = useStateOf(`input_select.${tank.id}_tilt`);
   const curBatch = useStateOf(`input_text.${tank.id}_batch`); // stored batchNo (free text)
+  const curTempSource = useStateOf(`input_select.${tank.id}_temp_source`); // Probe | Tilt
 
   // fermentation program: options + current selection + live status (from the
   // programs container's sensor.tank_N_program_status). Absent until the programs
@@ -51,8 +53,14 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
   const curProgram = useStateOf(`input_select.${tank.id}_program`);
   const programStatus = useEntityAttrs(`sensor.${tank.id}_program_status`);
   const [planEditor, setPlanEditor] = useState(false);
+  const [kegging, setKegging] = useState(false);
   const running = !!curProgram && curProgram !== 'None';
   const awaitingConfirm = programStatus?.awaitingConfirm === true;
+  // a batch is assigned to this tank → kegging is possible. curBatch is the BF batch number
+  // (free text). The batch NAME for the picker/log comes from the picker's live list, but
+  // kegBatch re-enriches from Brewfather by number, so the number is what matters.
+  const hasBatch = !!curBatch && !['', 'None', 'none', 'unknown'].includes(curBatch);
+  const curBatchName = useStateOf(`input_text.${tank.id}_batch_name`) || curBatch || '';
 
   return (
     <div style={{
@@ -144,6 +152,19 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
           )}
         </Field>
 
+        {/* TEMP CONTROL SOURCE — Probe (default) or Tilt. Pick 'Tilt' when the beer barely
+            covers the thermowell (shallow fill) so the ITC-308 holds the BEER, not the probe.
+            Only meaningful with a Tilt assigned + a program running. */}
+        <Field label="Temp control source">
+          <Pills options={['Probe', 'Tilt']} active={curTempSource || 'Probe'}
+            onPick={(v) => a.setTempSource(tank.id, v)} />
+          <div style={{ ...hint, marginTop: 6 }}>
+            {(curTempSource || 'Probe') === 'Tilt'
+              ? '⚑ Driving setpoint off the Tilt (beer), corrected vs the probe — for shallow fills.'
+              : 'ITC-308 holds its thermowell probe (default). Switch to Tilt if the beer barely covers the probe.'}
+          </div>
+        </Field>
+
         <Field label="Expected FG">
           <FgStepper current={tank.id}
             onSet={(fg) => a.setExpectedFg(tank.id, fg)} />
@@ -158,10 +179,28 @@ export function TankControls({ tank, onClose }: { tank: Tank; onClose: () => voi
             <span style={{ ...hint, marginLeft: 10 }}>last: {tank.daysSinceCleaned}d ago</span>
           )}
         </Field>
+
+        {/* KEGGING — the handoff to the keg fleet. Only when a batch is assigned (nothing to
+            keg otherwise). Fills clean keg(s) from this batch + frees the tank. */}
+        {hasBatch && (
+          <Field label="Kegging">
+            <button
+              onClick={() => setKegging(true)}
+              style={{ ...actionBtn, color: theme.color.green, borderColor: hexA(theme.color.green, 0.5), background: hexA(theme.color.green, 0.1) }}>
+              🛢 Keg this batch → keg(s)
+            </button>
+            <span style={{ ...hint, marginLeft: 10 }}>fills clean kegs; tap later from Kegs view</span>
+          </Field>
+        )}
       </div>
 
       {planEditor && curBatch && (
         <FermPlanEditor tankId={tank.id} batchNo={curBatch} onClose={() => setPlanEditor(false)} />
+      )}
+      {kegging && (
+        <KegBatchModal tank={tank}
+          batch={{ batchNo: curBatch ? Number(curBatch) : null, name: curBatchName }}
+          onClose={() => setKegging(false)} />
       )}
     </div>
   );

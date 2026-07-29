@@ -9,7 +9,7 @@
 import http from 'node:http';
 import https from 'node:https';
 
-const BREWFATHER_URL = (process.env.BREWFATHER_URL || 'http://192.168.50.118:8093').replace(/\/$/, '');
+const BREWFATHER_URL = (process.env.BREWFATHER_URL || 'http://tower.lan:8093').replace(/\/$/, '');
 const HA_URL = (process.env.HA_URL || '').replace(/\/$/, '');
 const HA_TOKEN = process.env.HA_TOKEN || '';
 

@@ -53,6 +53,9 @@ export function useBreweryActions() {
       call('input_select', 'select_option', `input_select.${t}_status`, { option: v }, `${label(t)} status → ${v}`),
     setTilt: (t: string, v: string) =>
       call('input_select', 'select_option', `input_select.${t}_tilt`, { option: v }, `${label(t)} Tilt → ${v}`),
+    // which sensor drives the setpoint: 'Probe' (default) or 'Tilt' (shallow-fill correction)
+    setTempSource: (t: string, v: string) =>
+      call('input_select', 'select_option', `input_select.${t}_temp_source`, { option: v }, `${label(t)} temp source → ${v}`),
     /** Assign a batch by writing the Brewfather batch NUMBER (stable ID) as free
      *  text — no options list, so HA can never reset it on restart. Empty string
      *  = unassigned. The picker passes the batchNo; display resolves it live.

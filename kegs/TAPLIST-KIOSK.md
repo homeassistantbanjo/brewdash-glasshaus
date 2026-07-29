@@ -5,7 +5,7 @@ and the QR scan pages — this is a read-only, glanceable, non-touch screen for 
 
 ## The URL
 ```
-http://192.168.50.118:8097/taplist       # LAN
+http://tower.lan:8097/taplist       # LAN
 https://unraid.tail229434.ts.net/taplist  # via Tailscale (once `tailscale serve` is set up)
 ```
 Shows: what's ON TAP now (each tapped keg → tap #, beer name, style, ABV) + a "Coming Soon"
@@ -37,7 +37,7 @@ Boot the Pi straight into a fullscreen Chromium pointed at the taplist. Minimal 
    Exec=chromium-browser --kiosk --noerrdialogs --disable-infobars \
      --disable-session-crashed-bubble --incognito \
      --check-for-update-interval=31536000 \
-     http://192.168.50.118:8097/taplist
+     http://tower.lan:8097/taplist
    ```
    `unclutter` hides the mouse cursor on an idle non-touch screen:
    `unclutter -idle 0.1 &` (add to autostart too).

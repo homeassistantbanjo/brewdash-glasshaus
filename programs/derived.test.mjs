@@ -169,6 +169,61 @@ r = computeDerived({ gravity:1.030, og:1.058, expectedFg:1.010, beerTempF:66, pr
   setpointF:66, gravity24hDeltaPts:-0.4, gravity8hMaxSg:1.031, gravityAgeMin:1 }, NOW);
 ok('stall still fires when NOT crashing', r.alerts.some(a=>a.key==='stalled'));
 
+// ── HELD GRAVITY (weak-BLE dropout) — display stays populated; signal-lost still honest.
+// gravity is a held last-good value (gravityHeld:true), live signal genuinely stale (30m).
+r = computeDerived({ gravity:1.020, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:-8, gravity8hMaxSg:1.025, gravityAgeMin:0,
+  liveGravityAgeMin:30, gravityHeld:true }, NOW);
+ok('held: attenuation still computes (card stays full)', r.attenuationPct===60);
+ok('held: drop-from-peak still computes', r.dropFromPeakPts===5);
+ok('held: flag exposed', r.gravityHeld===true);
+ok('held: signal-lost fires off TRUE live age (30m>15m), labelled holding',
+   r.alerts.some(a=>a.key==='signal_lost'&&/holding/.test(a.label)));
+// NOT held, live fresh → no signal-lost, plain (back-compat)
+r = computeDerived({ gravity:1.020, og:1.050, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:-8, gravity8hMaxSg:1.025, gravityAgeMin:2 }, NOW);
+ok('live fresh: no signal-lost, gravityHeld false', !r.alerts.some(a=>a.key==='signal_lost') && r.gravityHeld===false);
+
+// ── EARLY-BATCH velocity suppression (batch just started → wild extrapolated rate) ──
+// daysFermenting 0.1d (~2.4h) < 12h min → velocity/ETA suppressed, projected='just started'.
+r = computeDerived({ gravity:1.029, og:1.030, expectedFg:1.002, beerTempF:64, probeTempF:64,
+  setpointF:64, gravity24hDeltaPts:-12, gravity8hMaxSg:1.030, gravityAgeMin:1,
+  daysFermenting:0.1 }, NOW);
+ok('early: velocity suppressed (<12h fermenting)', r.gravityVelocityPerDay===null);
+ok('early: velTooEarly flag set', r.velTooEarly===true);
+ok('early: projected = "just started"', r.projectedFgReach==='just started');
+ok('early: no daysToTerminal (needs velocity)', r.daysToTerminal===null);
+// past the window → velocity shows normally
+r = computeDerived({ gravity:1.029, og:1.030, expectedFg:1.002, beerTempF:64, probeTempF:64,
+  setpointF:64, gravity24hDeltaPts:-12, gravity8hMaxSg:1.030, gravityAgeMin:1,
+  daysFermenting:1.5 }, NOW);
+ok('past window (1.5d): velocity shows', r.gravityVelocityPerDay===-0.012 && r.velTooEarly===false);
+// custom threshold honored
+r = computeDerived({ gravity:1.029, og:1.030, expectedFg:1.002, beerTempF:64, probeTempF:64,
+  setpointF:64, gravity24hDeltaPts:-12, gravity8hMaxSg:1.030, gravityAgeMin:1,
+  daysFermenting:0.3, minVelocityHours:6 }, NOW);  // 0.3d=7.2h > 6h → shown
+ok('custom minVelocityHours=6 honored (7.2h shows)', r.gravityVelocityPerDay===-0.012);
+
+// ── IMPLAUSIBLE velocity clamp (HA 24h-stat garbage on a fresh batch: -120 pts/day) ──
+// delta -120 pts/day is impossible; past the early window (daysFermenting high) so ONLY the
+// plausibility clamp can catch it. Velocity suppressed, projected='settling'.
+r = computeDerived({ gravity:1.029, og:1.030, expectedFg:1.002, beerTempF:64, probeTempF:64,
+  setpointF:64, gravity24hDeltaPts:-120, gravity8hMaxSg:1.030, gravityAgeMin:1,
+  daysFermenting:0.8 }, NOW);
+ok('implausible -120pts/day → velocity suppressed', r.gravityVelocityPerDay===null);
+ok('implausible → velImplausible flag', r.velImplausible===true);
+ok('implausible → projected "settling"', r.projectedFgReach==='settling');
+// a plausible fast peak-krausen rate (-15 pts/day) is KEPT
+r = computeDerived({ gravity:1.040, og:1.060, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:-15, gravity8hMaxSg:1.048, gravityAgeMin:1,
+  daysFermenting:2 }, NOW);
+ok('plausible -15pts/day kept', r.gravityVelocityPerDay===-0.015 && r.velImplausible===false);
+// custom ceiling honored
+r = computeDerived({ gravity:1.040, og:1.060, expectedFg:1.010, beerTempF:66, probeTempF:66,
+  setpointF:66, gravity24hDeltaPts:-30, gravity8hMaxSg:1.048, gravityAgeMin:1,
+  daysFermenting:2, maxVelocityPtsPerDay:40 }, NOW);
+ok('custom ceiling 40 keeps -30', r.gravityVelocityPerDay===-0.03);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
 

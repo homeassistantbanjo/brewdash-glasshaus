@@ -61,7 +61,23 @@ function projectedFgDate(sg, fg, velPerDaySg, now) {
 export function computeDerived(t, now = 0) {
   const gravity = n(t.gravity), og = n(t.og), fg = n(t.expectedFg);
   const delta = n(t.gravity24hDeltaPts);
-  const velSg = delta != null ? delta / 1000 : null; // pts/day → SG/day
+  // EARLY-BATCH velocity suppression: a batch that just started fermenting has almost no
+  // elapsed time, so ANY tiny gravity wiggle ÷ a near-zero window extrapolates to a wild daily
+  // rate (batch 148 showed -0.12 SG/day = 12pts/day on day 0 — garbage, not real activity). So
+  // don't report velocity/ETA until the ferment has run long enough for the slope to mean
+  // something. daysFermenting is elapsed since Brewfather fermentingStart. MIN default 12h.
+  const daysFermentingEarly = n(t.daysFermenting);
+  const minVelHours = n(t.minVelocityHours) ?? 12;
+  const velTooEarly = daysFermentingEarly != null && daysFermentingEarly * 24 < minVelHours;
+  // PHYSICAL PLAUSIBILITY clamp: no real fermentation drops faster than ~MAX_VEL_PTS pts/day
+  // even at peak krausen. HA's 24h-stat sensor computes GARBAGE on a fresh batch (partial
+  // window + sharp post-pitch settling extrapolated to a full day) — batch 148 showed -120
+  // pts/day, impossible (that's a whole ferment in ~4h). Reject any |delta| beyond the ceiling
+  // regardless of WHY the window is bad — this is the durable guard the elapsed-time gate can't
+  // be alone (fermentingStart is a date=midnight, so "hours elapsed" misreads a same-day pitch).
+  const MAX_VEL_PTS = n(t.maxVelocityPtsPerDay) ?? 20;   // pts/day ceiling
+  const velImplausible = delta != null && Math.abs(delta) > MAX_VEL_PTS;
+  const velSg = (delta != null && !velTooEarly && !velImplausible) ? delta / 1000 : null; // pts/day → SG/day
 
   const attenuationPct = calcAttenuation(og, gravity);
   // Physically implausible gravity → the Tilt isn't in the beer (fallen sideways,
@@ -78,12 +94,16 @@ export function computeDerived(t, now = 0) {
   // Report 'crashing' instead so the UI shows the real situation, not a false stall.
   const projectedFgReach = (t.inCrash === true)
     ? 'crashing'
-    : projectedFgDate(gravity, fg, velSg, now);
+    : velTooEarly
+      ? 'just started'                        // too early for a trustworthy projection
+      : velImplausible
+        ? 'settling'                          // rate reading is bogus (fresh-batch stat noise)
+        : projectedFgDate(gravity, fg, velSg, now);
 
   // Pace vs schedule: days ahead(+)/behind(-) the planned ferment window, by
   // attenuation progress vs elapsed fraction. Mirrors the old YAML gh_ferment_pace.
   // planned_days from Brewfather fermentation window if given, else 7 (TODO expose).
-  const daysFermenting = n(t.daysFermenting);
+  const daysFermenting = daysFermentingEarly;
   const plannedDays = n(t.plannedFermentDays) ?? 7;
   const paceVsSchedule = (progressToFgPct != null && daysFermenting != null && plannedDays > 0)
     ? round(((progressToFgPct / 100) - Math.min(daysFermenting / plannedDays, 1)) * plannedDays, 1)
@@ -102,6 +122,11 @@ export function computeDerived(t, now = 0) {
   const tiltProbeDeltaF = (n(t.beerTempF) != null && n(t.probeTempF) != null)
     ? round(t.beerTempF - t.probeTempF, 1) : null;
   const gravityAgeMin = n(t.gravityAgeMin);
+  // Whether the gravity used here is a HELD last-good value (Tilt dropped out) rather than
+  // live. `liveGravityAgeMin` is the TRUE age of the live signal (null/large when flapping);
+  // it drives the honest "signal lost" warning even while the held value keeps the card full.
+  const gravityHeld = t.gravityHeld === true;
+  const liveGravityAgeMin = n(t.liveGravityAgeMin);
 
   // --- gravity STABILITY: how long has gravity held terminal? -----------------
   // "stable" = within NEAR_TERMINAL_SG of expected FG AND flat (|24h delta| < 1pt).
@@ -147,10 +172,19 @@ export function computeDerived(t, now = 0) {
   // the setpoint last stepped) let us hold those alerts until things normalize.
   const inCrash = t.inCrash === true;
   const setpointSettling = n(t.setpointChangedMinAgo) != null && t.setpointChangedMinAgo < EXCURSION_SETTLE_MIN;
-  const flat = delta != null && Math.abs(delta) < STALL_FLAT_PTS;
+  // `flat` needs a TRUSTWORTHY 24h delta. A flapping Tilt (weak BLE signal) yields a
+  // sparse/gappy history, so the 24h slope can compute as ~0 even while gravity is really
+  // falling over days → false "flat". So flat ALSO requires the beer NOT be actively
+  // dropping from its 8h peak (activelyFermenting, which is settling-proof). If it's still
+  // pulling points off the peak, it is by definition not stalled — no matter what the noisy
+  // 24h delta says.
+  const flat = delta != null && Math.abs(delta) < STALL_FLAT_PTS && !activelyFermenting;
   const aboveFg = (gravity != null && fg != null) && (gravity - fg) > STALL_ABOVE_FG_SG;
   // STALLED: a beer that's flat + still well above FG is a real problem — UNLESS it's
   // being cold-crashed (cold stops fermentation ON PURPOSE, so flat-above-FG is expected).
+  // The `flat` guard above already excludes a beer still dropping from peak, so a low-OG
+  // ferment that's visibly attenuating (your 1.035→1.028 case) is `activelyFermenting` →
+  // not flat → no false stall. A genuinely stuck beer (flat AND not dropping) still fires.
   if (hasBatch && flat && aboveFg && !inCrash)
     alerts.push({ key: 'stalled', severity: 'problem', label: 'STALLED' });
   // TEMP EXCURSION: probe off setpoint. NOT gravity-based (matters even with no batch),
@@ -161,8 +195,11 @@ export function computeDerived(t, now = 0) {
     alerts.push({ key: 'temp_excursion', severity: 'problem', label: 'TEMP EXCURSION' });
   if (hasBatch && tiltProbeDeltaF != null && Math.abs(tiltProbeDeltaF) > SUSPECT_DELTA_F)
     alerts.push({ key: 'assignment_suspect', severity: 'problem', label: 'ASSIGNMENT SUSPECT' });
-  if (hasBatch && gravityAgeMin != null && gravityAgeMin > SIGNAL_LOST_MIN)
-    alerts.push({ key: 'signal_lost', severity: 'warning', label: 'TILT SIGNAL LOST' });
+  // Signal-lost keys off the TRUE live age (not the held display age): the hold keeps
+  // numbers on-screen, but if the live Tilt hasn't reported in >15min we still say so.
+  const signalAgeMin = liveGravityAgeMin != null ? liveGravityAgeMin : gravityAgeMin;
+  if (hasBatch && signalAgeMin != null && signalAgeMin > SIGNAL_LOST_MIN)
+    alerts.push({ key: 'signal_lost', severity: 'warning', label: gravityHeld ? 'TILT SIGNAL LOST (holding)' : 'TILT SIGNAL LOST' });
   // confirmed-terminal is a stronger, better milestone than bare near-terminal:
   // gravity has HELD stable for the required window (3d, or 6d dry-hopped).
   if (hasBatch && readyToKeg)
@@ -177,6 +214,22 @@ export function computeDerived(t, now = 0) {
   return {
     attenuationPct, gravitySuspect, progressToFgPct, paceVsSchedule, dropFromPeakPts, daysToTerminal,
     projectedFgReach, tiltProbeDeltaF, gravityAgeMin, fermentationStarted, activelyFermenting, alerts,
+    // gravityHeld: the displayed gravity/attenuation/drop are a HELD last-good value (Tilt
+    // flapped) — the UI badges it so you know it's not live. liveGravityAgeMin = true signal age.
+    // gravity: the DISPLAY gravity actually used here (live OR held) so the app's headline SG
+    // can fall back to it when the raw Tilt sensor is `unavailable` — without this the big
+    // gravity number blanks even though we hold a good value.
+    gravityHeld, liveGravityAgeMin, gravity,
+    // EXPOSE the velocity used for the projection (SG/day, negative = attenuating) so the
+    // app can display it directly. Sourced from the SAME 24h delta the ETA math uses, so a
+    // tank with no per-color HA stat + no Brewfather history (e.g. Orange/tank_3, whose BF
+    // readings are empty) still shows a velocity from the runner's own window slope — the
+    // card previously read only the per-color stat / BF history and showed '—' for it.
+    gravityVelocityPerDay: velSg,
+    // velTooEarly: velocity/ETA suppressed because the batch just started (< minVelocityHours
+    // elapsed). velImplausible: the 24h-stat rate exceeds the physical ceiling (fresh-batch stat
+    // noise, e.g. -120 pts/day). Either → velocity is null; UI shows "just started"/"settling".
+    velTooEarly, velImplausible,
     // gravity stability (readiness signal)
     isStableNow, stableDays, terminalConfirmed, requiredStableDays,
     // conditioning countdown (time-based; target resolved from Brewfather facts)

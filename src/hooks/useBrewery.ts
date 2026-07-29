@@ -4,14 +4,15 @@
  * touches an entity string.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useHaEntity } from '../data/haStates';
 import {
   Tank, TankStatus, TiltDevice, GlycolLoop, BrewfatherBatch, BatchReading,
   ActiveBatch, TiltColor, CADENCE, Reading, EquipmentPower, PowerState, EnergyUsage,
   TankAlert, isActiveBrew,
 } from '../types/domain';
-import { toReading, composeBatch, normalizeReading } from '../data/derive';
+import { toReading, composeBatch, normalizeReading,
+  calcAttenuation, calcAbv, calcAttenuationProgress } from '../data/derive';
 import {
   TANKS, PLANT, PLANT_DIAG, KEGERATOR, POWER_THRESHOLDS, tankControllerEnergy,
   tiltEntities, tiltStatEntities, derivedEntity, tiltSignalLostEntity,
@@ -87,11 +88,24 @@ export function useAllTanks(): Tank[] {
 // Tilt — only returns colors currently broadcasting (present + not stale-dead)
 // ---------------------------------------------------------------------------
 
+// How long to keep showing a Tilt's LAST reading after HA reports it 'unavailable'.
+// The Tilt Pi → HA push is flaky (a reading can blip to 'unavailable' for a few
+// minutes, then return). Blanking the whole card on every blip is worse than showing
+// the last gravity dimmed with a STALE flag — the brewer doesn't care about a few
+// minutes' lag. So we LATCH the last good reading for this long. Only after a genuine,
+// sustained outage (Tilt actually removed / dead) does the card clear. Generous window
+// so a normal push hiccup never blanks it.
+const TILT_LATCH_MS = 90 * 60_000; // 90 min
+
 export function useTilt(color: TiltColor): TiltDevice | null {
   const ids = tiltEntities(color);
   const stats = tiltStatEntities(color);
   const grav = safeEntity(ids.gravity);
   const temp = safeEntity(ids.temperature);
+
+  // Last-known-good latch: survives transient 'unavailable' blips from the Pi→HA push
+  // so the card holds the last reading (flagged stale) instead of going blank.
+  const lastGood = useRef<{ gravity: Reading<number>; temperature: Reading<number>; at: number } | null>(null);
 
   // Stats: read the preferred per-color sensor AND (for Black) the legacy
   // un-namespaced one. Both reads are unconditional to keep hook order stable.
@@ -105,12 +119,26 @@ export function useTilt(color: TiltColor): TiltDevice | null {
   const tMaxFall = safeEntity(stats.beerTemp24hMax.fallback ?? 'sensor.__none__');
 
   return useMemo(() => {
-    if (grav == null && temp == null) return null;
-    const gravity = toReading(ids.gravity, grav?.state, grav?.last_updated, CADENCE.tilt);
+    let gravity = toReading(ids.gravity, grav?.state, grav?.last_updated, CADENCE.tilt);
     // Tilt temp uses a longer cadence — it changes slowly so last_updated lags.
-    const temperature = toReading(ids.temperature, temp?.state, temp?.last_updated, CADENCE.tiltTemp);
-    // a Tilt whose entities exist but read dead for a long time is "not present"
-    if (gravity.value == null && temperature.value == null) return null;
+    let temperature = toReading(ids.temperature, temp?.state, temp?.last_updated, CADENCE.tiltTemp);
+
+    const now = Date.now();
+    const haveLive = gravity.value != null || temperature.value != null;
+    if (haveLive) {
+      // fresh data → refresh the latch
+      lastGood.current = { gravity, temperature, at: now };
+    } else if (lastGood.current && now - lastGood.current.at < TILT_LATCH_MS) {
+      // transient 'unavailable' blip (Pi→HA push dropped) — keep showing the LAST
+      // reading, but downgrade its staleness to 'stale' so the card dims it + shows a
+      // STALE flag instead of blanking. This is the "I don't care about a few minutes'
+      // lag" behavior: last-known values persist through push hiccups.
+      gravity = { ...lastGood.current.gravity, staleness: 'stale' };
+      temperature = { ...lastGood.current.temperature, staleness: 'stale' };
+    } else {
+      // never had data, or the outage exceeded the latch window (real removal) → gone
+      return null;
+    }
 
     // For each stat, prefer the per-color entity; if it has no value, fall back
     // to the legacy (Black-only) entity. Returns null if neither resolves.
@@ -512,12 +540,16 @@ interface AssignmentInputs {
   fermentationStarted: boolean | null;
   projectedFgReach: string | null;
   paceVsSchedule: number | null;
+  /** runner-computed velocity (SG/day) — fallback when per-color stat + BF history are empty */
+  derivedVelocityPerDay: number | null;
   /** active tank-scoped alerts (from HA alert binary_sensors). Signal-lost is
    *  added later in useActiveBatches (it's keyed by the resolved Tilt color). */
   alerts: TankAlert[];
   // extra diagnostics for the card's 3rd metric row (null when unavailable)
   gravityDropFromPeak: number | null;  // pts below 8h peak
   tiltGravityAgeMin: number | null;    // minutes since last Tilt reading
+  gravityHeld: boolean;                // shown gravity is a HELD last-good value (Tilt dropout)
+  heldGravityValue: number | null;     // the held SG itself (from VM), for the headline fallback
   stableDays: number | null;           // days gravity has held terminal-stable
   terminalConfirmed: boolean;          // stable ≥ required window (3d, 6d dry-hop)
   dryHop: boolean;                     // recipe has a dry-hop step (from Brewfather)
@@ -558,9 +590,15 @@ function useTankAssignmentInputs(cfg: TankConfig): AssignmentInputs {
       fermentationStarted: typeof a.fermentationStarted === 'boolean' ? a.fermentationStarted : null,
       projectedFgReach: typeof a.projectedFgReach === 'string' ? a.projectedFgReach : null,
       paceVsSchedule: numAttr(a.paceVsSchedule),
+      // velocity the runner computed (SG/day) — used as the fallback when the app's own
+      // per-color Tilt stat + Brewfather history are BOTH empty (e.g. Orange/tank_3), so the
+      // card shows a real velocity + ETA instead of '—'.
+      derivedVelocityPerDay: numAttr(a.gravityVelocityPerDay),
       alerts,
       gravityDropFromPeak: numAttr(a.dropFromPeakPts),
       tiltGravityAgeMin: numAttr(a.gravityAgeMin),
+      gravityHeld: a.gravityHeld === true,
+      heldGravityValue: numAttr(a.gravity),
       stableDays: numAttr(a.stableDays),
       terminalConfirmed: a.terminalConfirmed === true,
       dryHop: a.dryHop === true,
@@ -688,8 +726,8 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
   // Pure map over already-read values — no hooks in this callback.
   const batches = tanks.map((tank, i) => {
     const { tiltSel, batchSel, expectedFg, assignedAt,
-      fermentationStarted, projectedFgReach, paceVsSchedule, alerts: tankAlerts,
-      gravityDropFromPeak, tiltGravityAgeMin, stableDays, terminalConfirmed,
+      fermentationStarted, projectedFgReach, paceVsSchedule, derivedVelocityPerDay, alerts: tankAlerts,
+      gravityDropFromPeak, tiltGravityAgeMin, gravityHeld, heldGravityValue, stableDays, terminalConfirmed,
       dryHop, bfConditioned, conditionDays, conditioningDaysElapsed, readyToKeg } = assignments[i];
 
     // "None"/"none" (either casing) both mean "no Tilt assigned" — the HA
@@ -734,8 +772,29 @@ export function useActiveBatches(): { tanks: Tank[]; batches: (ActiveBatch | nul
       composed.fermentationStarted = fermentationStarted;
       composed.projectedFgReach = projectedFgReach;
       composed.paceVsSchedule = paceVsSchedule;
+      // If composeBatch couldn't resolve a velocity (no per-color Tilt stat AND no BF
+      // history — the Orange/tank_3 case), fall back to the runner's derived velocity so
+      // the card's VEL + ETA show a real number instead of '—'.
+      if (composed.gravityVelocityPerDay == null && derivedVelocityPerDay != null) {
+        composed.gravityVelocityPerDay = derivedVelocityPerDay;
+      }
       composed.gravityDropFromPeak = gravityDropFromPeak;
       composed.tiltGravityAgeMin = tiltGravityAgeMin;
+      composed.gravityHeld = gravityHeld;
+
+      // HELD-GRAVITY HEADLINE FALLBACK: the raw Tilt sensor is `unavailable` during a BLE
+      // dropout, so composeBatch left gravity.value (and everything derived from it —
+      // attenuation, ABV, progress) null and the big GRAVITY number blanked. The runner
+      // holds a last-good SG from VM; inject it here so the card shows the held value
+      // (badged HELD via gravityHeld) instead of a blank. Only when we HAVE a held value
+      // AND the live one is genuinely absent — never overrides a real live reading.
+      if (gravityHeld && heldGravityValue != null && composed.gravity.value == null) {
+        composed.gravity = { ...composed.gravity, value: heldGravityValue };
+        composed.attenuation = calcAttenuation(composed.og, heldGravityValue);
+        composed.abv = calcAbv(composed.og, heldGravityValue);
+        composed.attenuationProgress =
+          calcAttenuationProgress(composed.og, heldGravityValue, composed.expectedFg);
+      }
       composed.stableDays = stableDays;
       composed.terminalConfirmed = terminalConfirmed;
       composed.dryHop = dryHop;

@@ -14,11 +14,11 @@
 
 rest_command:
   glasshaus_insight_trigger:
-    url: "http://192.168.50.118:8091/trigger"
+    url: "http://tower.lan:8091/trigger"
     method: POST
     content_type: "application/json"
     payload: '{"reason": "{{ reason }}"}'
 
   glasshaus_plant_refresh:
-    url: "http://192.168.50.118:8091/insights/refresh"
+    url: "http://tower.lan:8091/insights/refresh"
     method: POST

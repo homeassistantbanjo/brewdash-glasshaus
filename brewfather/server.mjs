@@ -25,6 +25,27 @@ const AUTH = 'Basic ' + Buffer.from(`${BF_USERID}:${BF_APIKEY}`).toString('base6
 // Absent → the endpoint returns 501 and the UI hides the "Suggest Ferm Plan" button.
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
 const PLAN_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+// VictoriaMetrics — the app's graphs read gravity/temp history from OUR TSDB (durable,
+// every-tick, complete) rather than Brewfather's flaky/empty batch.history. This sidecar
+// proxies the range query so the browser hits one CORS-friendly origin.
+const VM_URL = (process.env.VM_URL || 'http://tower.lan:8428').replace(/\/$/, '');
+
+/** Query VM for a gh_ferment_<metric> range for one tank → [{t: sec, v: number}]. */
+async function vmSeries(metric, tank, hours = 336) {
+  const end = Math.floor(Date.now() / 1000);
+  const start = end - hours * 3600;
+  const q = encodeURIComponent(`gh_ferment_${metric}{tank="${tank}"}`);
+  // step scales with window so a long ferment doesn't return 10k points: ~600 max
+  const step = Math.max(300, Math.round((end - start) / 600));
+  const url = `${VM_URL}/api/v1/query_range?query=${q}&start=${start}&end=${end}&step=${step}`;
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return [];
+    const j = await r.json();
+    const vals = j?.data?.result?.[0]?.values || [];
+    return vals.map(([t, v]) => ({ t: Number(t), v: Number(v) })).filter((p) => Number.isFinite(p.v));
+  } catch { return []; }
+}
 
 function required(k) {
   const v = process.env[k];
@@ -686,6 +707,19 @@ createServer((req, res) => {
         sendJson(res, 502, { error: e.message });
       }
     });
+    return;
+  }
+
+  // GET /series/:tank → gravity + beer-temp history from VictoriaMetrics (our durable,
+  // every-tick store), so the app's Graphs read from data WE own instead of Brewfather's
+  // flaky/empty batch.history. Optional ?hours=N (default 336=14d). CORS-enabled.
+  const seriesMatch = req.method === 'GET' && req.url?.match(/^\/series\/([^/?]+)/);
+  if (seriesMatch) {
+    const tank = decodeURIComponent(seriesMatch[1]);
+    const hours = Number(new URL(req.url, 'http://x').searchParams.get('hours')) || 336;
+    Promise.all([vmSeries('gravity', tank, hours), vmSeries('beer_temp_f', tank, hours)])
+      .then(([gravity, temp]) => sendJson(res, 200, { tank, gravity, temp }))
+      .catch((e) => sendJson(res, 502, { error: e.message }));
     return;
   }
 

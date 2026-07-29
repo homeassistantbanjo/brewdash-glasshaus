@@ -298,6 +298,9 @@ export interface ActiveBatch {
   gravityDropFromPeak: number | null;
   /** minutes since the Tilt last pushed a gravity reading (freshness) */
   tiltGravityAgeMin: number | null;
+  /** the shown gravity/attenuation is a HELD last-good value (Tilt dropped out, weak BLE) —
+   *  the card badges it so a held reading is visibly distinct from a live one */
+  gravityHeld: boolean;
   /** days gravity has held terminal-stable (near FG + flat); null when not stable */
   stableDays: number | null;
   /** true once stable ≥ the required window (3d normal, 6d dry-hopped) */
