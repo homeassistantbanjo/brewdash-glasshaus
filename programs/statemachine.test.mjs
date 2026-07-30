@@ -103,5 +103,57 @@ ok('adopt 60% atten → ramp phase 1', resolveStartPhase(lm,{apparentAttenuation
 ok('adopt terminal → cleanup phase 2', resolveStartPhase(lm,{apparentAttenuationPct:80,gravity:1.011,expectedFg:1.010,gravity24hDeltaPts:-0.3})===2);
 ok('adopt never skips gated crash', resolveStartPhase(PRESETS.coldcrash,{apparentAttenuationPct:99,gravity:1.008,expectedFg:1.010,gravity24hDeltaPts:0})===0);
 
+// --- BUG 1: editing a plan (deleting phases) must not leave phaseIndex past the array,
+//     which made tick() see phases[1]=undefined and report "program complete" on a 1-phase
+//     crash-only plan that never ran. clampPhaseIndex snaps a stale index into range. ---
+ok('clampPhaseIndex: stale idx 1 on 1-phase plan → 0', _internals.clampPhaseIndex(1, 1)===0);
+ok('clampPhaseIndex: idx 3 on 2-phase plan → 1 (last)', _internals.clampPhaseIndex(3, 2)===1);
+ok('clampPhaseIndex: valid idx unchanged', _internals.clampPhaseIndex(1, 3)===1);
+ok('clampPhaseIndex: idx 0 unchanged', _internals.clampPhaseIndex(0, 1)===0);
+ok('clampPhaseIndex: negative → 0', _internals.clampPhaseIndex(-1, 2)===0);
+ok('clampPhaseIndex: empty plan → 0', _internals.clampPhaseIndex(2, 0)===0);
+// end-to-end: the actual failure — a 1-phase crash plan run at the clamped index 0 must
+// produce a crash setpoint, NOT "program complete"
+{
+  const crashOnly = { clamp:{minF:32,maxF:75}, phases:[{ name:'Cold Crash', kind:'coldCrash', targetF:36, stepF:3, everyHours:1 }] };
+  const idx = _internals.clampPhaseIndex(1, crashOnly.phases.length); // stale 1 → 0
+  const r = tick(crashOnly, { phaseIndex: idx, phaseElapsedHours: 0, currentSetpointF: 66, phaseStartSetpointF: 66, confirmPressed: true });
+  ok('crash-only at clamped idx: runs (not done)', r.done !== true && r.setpointF != null);
+  ok('crash-only at clamped idx: steps DOWN toward 36', r.setpointF < 66);
+}
+
+// --- BUG 2: a user-SELECTED cold-crash plan should NOT silently wait for a confirm press
+//     it never told the user about. A crash phase with requiresConfirm:false runs immediately;
+//     selecting the crash IS the decision. (Gate only when the plan explicitly asks.) ---
+{
+  const crashNoConfirm = { clamp:{minF:32,maxF:75}, phases:[{ name:'Cold Crash', kind:'coldCrash', targetF:36, stepF:3, everyHours:1, requiresConfirm:false }] };
+  const r = tick(crashNoConfirm, { phaseIndex:0, phaseElapsedHours:0, currentSetpointF:66, phaseStartSetpointF:66, confirmPressed:false });
+  ok('crash requiresConfirm:false runs WITHOUT a confirm press', r.awaitingConfirm !== true && r.setpointF != null && r.setpointF < 66);
+}
+{
+  const crashGated = { clamp:{minF:32,maxF:75}, phases:[{ name:'Cold Crash', kind:'coldCrash', targetF:36, stepF:3, everyHours:1, requiresConfirm:true }] };
+  const r = tick(crashGated, { phaseIndex:0, phaseElapsedHours:0, currentSetpointF:66, phaseStartSetpointF:66, confirmPressed:false });
+  ok('crash requiresConfirm:true STILL gates (opt-in confirm honored)', r.awaitingConfirm === true);
+}
+
+// --- BUG 3: crash confirm must LATCH — once a crash phase is started, it must NOT re-ask for
+//     confirmation on later ticks. The press only lives ~5min (button freshness window) but the
+//     crash spans hours; so after 5min the gate re-fired "awaiting confirmation" repeatedly.
+//     A `phaseConfirmed` latch (persisted by the runner) means: already-started crash keeps
+//     running WITHOUT a fresh press. ---
+{
+  const crashGated = { clamp:{minF:32,maxF:75}, phases:[{ name:'Cold Crash', kind:'coldCrash', targetF:36, stepF:3, everyHours:1, requiresConfirm:true }] };
+  const base = { phaseIndex:0, phaseElapsedHours:2, currentSetpointF:58, phaseStartSetpointF:64 };
+  // press has expired (confirmPressed=false) BUT the phase was already confirmed earlier (latched)
+  const r = tick(crashGated, { ...base, confirmPressed:false, phaseConfirmed:true });
+  ok('latched crash keeps running WITHOUT a fresh press', r.awaitingConfirm !== true && r.setpointF != null && r.setpointF < 64);
+  // neither pressed nor latched → still gates (first entry)
+  const r2 = tick(crashGated, { ...base, phaseElapsedHours:0, confirmPressed:false, phaseConfirmed:false });
+  ok('un-confirmed crash still gates on first entry', r2.awaitingConfirm === true);
+  // fresh press still works (no latch yet)
+  const r3 = tick(crashGated, { ...base, phaseElapsedHours:0, confirmPressed:true, phaseConfirmed:false });
+  ok('fresh press starts the crash', r3.awaitingConfirm !== true && r3.setpointF < 64);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

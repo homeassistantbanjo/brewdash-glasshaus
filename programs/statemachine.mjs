@@ -8,6 +8,19 @@ const MAX_STEP_F = 5;      // hard cap on any single setpoint change
 const TERMINAL_FLAT_PTS = 1.0;   // |gravity_24h_delta| < this = "flat"
 const TERMINAL_NEAR_FG_SG = 0.003; // within this of expected FG = "at terminal"
 
+// Snap a stored phase index into range for the CURRENT plan. When a plan is edited (phases
+// deleted in the UI), the persisted program_phase can point PAST the now-shorter array →
+// tick() sees phases[idx]=undefined and falsely reports "program complete" (the crash-only
+// bug: a 1-phase crash plan stuck at index 1 never ran). Clamp to [0, phaseCount-1]; empty
+// plan → 0. Pure.
+function clampPhaseIndex(storedIdx, phaseCount) {
+  const n = Number(storedIdx);
+  const count = Number(phaseCount) || 0;
+  if (count <= 0) return 0;
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(Math.floor(n), count - 1);
+}
+
 function clampTemp(f, clamp) {
   const min = clamp?.minF ?? 32;
   const max = Math.min(clamp?.maxF ?? 75, CUSTOM_MAX_CEILING_F);
@@ -152,8 +165,13 @@ export function tick(program, state) {
       advanceTo: null, paused: true, note: 'gravity data stale — holding, not advancing' };
   }
 
-  // GATED phase (e.g. cold crash): do not run until confirmed.
-  if (phase.requiresConfirm && !state.confirmPressed) {
+  // GATED phase (e.g. cold crash): do not run until confirmed ONCE. A fresh button press
+  // (confirmPressed) OR a persisted per-phase latch (phaseConfirmed, set by the runner after
+  // the first confirm) both count as confirmed. The latch is essential: the button-press
+  // freshness window is ~5min but a crash spans hours — without the latch the gate re-fired
+  // "awaiting confirmation" every 5min and the user had to keep re-confirming. Confirm once,
+  // runs to completion; a NEW crash phase (fresh entry) latches false again and re-asks once.
+  if (phase.requiresConfirm && !state.confirmPressed && !state.phaseConfirmed) {
     return { setpointF: clampTemp(state.currentSetpointF ?? 34, program.clamp),
       advanceTo: null, awaitingConfirm: true,
       note: `awaiting confirmation to start "${phase.name}"` };
@@ -181,4 +199,4 @@ export function tick(program, state) {
   return { setpointF, advanceTo, note: `${phase.name}: target ${setpointF}°F` };
 }
 
-export const _internals = { clampTemp, rateLimit, conditionMet, phaseTargetTemp };
+export const _internals = { clampTemp, rateLimit, conditionMet, phaseTargetTemp, clampPhaseIndex };

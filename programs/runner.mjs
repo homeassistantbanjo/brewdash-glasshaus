@@ -11,7 +11,8 @@
 //   input_button.tank_N_confirm_crash  the crash-confirm gate
 //   sensor.tank_N_program_status       (written by us: human status string + attrs)
 import { PRESETS } from './presets.mjs';
-import { tick, resolveStartPhase } from './statemachine.mjs';
+import { tick, resolveStartPhase, _internals } from './statemachine.mjs';
+const { clampPhaseIndex } = _internals;
 import { computeDerived, updateStableClock } from './derived.mjs';
 import { writeAllTankMetrics, vmGravitySlopePts, vmLastGravity } from './metrics.mjs';
 import { smoothOffset, slewLimit, beerInBand } from './tiltcomp.mjs';
@@ -106,7 +107,21 @@ async function tickTank(tankId, by) {
   const program = resolveProgram(programKey, by, tankId);
   if (!program) { console.log(`[${tankId}] unknown program '${programKey}'`); return; }
 
-  const phaseIndex = numOr(s(`input_number.${tankId}_program_phase`), 0);
+  const rawPhaseIndex = numOr(s(`input_number.${tankId}_program_phase`), 0);
+  // CLAMP a stale phase index into the CURRENT plan's range. Editing a plan (deleting phases
+  // in the UI) leaves program_phase pointing PAST the now-shorter array → tick() sees an
+  // undefined phase and falsely reports "program complete" (the crash-only bug: a 1-phase
+  // crash plan stuck at index 1 never ran, said complete after one step). Snap it back AND
+  // persist the correction so it's durably fixed, not re-derived every tick.
+  const phaseIndex = clampPhaseIndex(rawPhaseIndex, program.phases.length);
+  if (phaseIndex !== rawPhaseIndex && !DRY_RUN) {
+    console.log(`[${tankId}] phase index ${rawPhaseIndex} out of range for ${program.phases.length}-phase plan → clamped to ${phaseIndex}`);
+    await callService('input_number', 'set_value',
+      { entity_id: `input_number.${tankId}_program_phase`, value: phaseIndex });
+    // re-anchor the phase-start so the clamped phase runs from now, not a stale elapsed time
+    await callService('input_datetime', 'set_datetime',
+      { entity_id: `input_datetime.${tankId}_program_phase_started`, datetime: nowIso() });
+  }
   const phaseStartedIso = s(`input_datetime.${tankId}_program_phase_started`);
   // TIME_SCALE accelerates the phase clock for the live demo (see env def). At 1 it's
   // real elapsed hours; at 3600 one real second counts as one phase-hour.
@@ -140,10 +155,28 @@ async function tickTank(tankId, by) {
     }
   }
 
+  // CRASH-CONFIRM LATCH: once a gated crash phase is confirmed, remember WHICH phase index was
+  // confirmed. The button press only stays "fresh" ~5min but a crash runs for hours — without
+  // this latch the gate re-fired every 5min and forced re-confirmation. Latched in-memory
+  // (crashConfirmed Map, keyed tank->phaseIndex) AND mirrored to an optional HA helper for
+  // durability if it exists. In-memory alone is fine: a container restart mid-crash would
+  // re-ask once (safe), and phaseConfirmed also reads the helper when present.
+  const helperConfirmed = s(`input_text.${tankId}_crash_confirmed_phase`);
+  const memConfirmed = crashConfirmed.get(tankId);
+  const phaseConfirmed = String(memConfirmed) === String(phaseIndex)
+    || (helperConfirmed != null && helperConfirmed !== '' && String(helperConfirmed) === String(phaseIndex));
+  // if a fresh press just arrived for a gated phase, latch it (memory + optional HA helper)
+  if (confirmPressed && !phaseConfirmed) {
+    crashConfirmed.set(tankId, phaseIndex);
+    if (!DRY_RUN) await callService('input_text', 'set_value',
+      { entity_id: `input_text.${tankId}_crash_confirmed_phase`, value: String(phaseIndex) }).catch(() => {});
+    console.log(`[${tankId}] crash confirm LATCHED for phase ${phaseIndex} (won't re-ask)`);
+  }
+
   const state = {
     phaseIndex, phaseElapsedHours, currentSetpointF,
     phaseStartSetpointF: numOr(phaseStartSetpoints.get(psKey), currentSetpointF),
-    gravityStale: ci.gravityStale, confirmPressed,
+    gravityStale: ci.gravityStale, confirmPressed, phaseConfirmed,
     gravity: ci.gravity ?? null,
     expectedFg: ci.expectedFg ?? null,
     og: ci.og ?? null,
@@ -336,7 +369,12 @@ async function tickTank(tankId, by) {
         { entity_id: `input_number.${tankId}_program_phase`, value: r.advanceTo });
       await callService('input_datetime', 'set_datetime',
         { entity_id: `input_datetime.${tankId}_program_phase_started`, datetime: nowIso() });
+      // clear the crash-confirm latch on phase change so a LATER gated phase re-asks once
+      // (the latch is keyed to the specific phase index we just left).
+      await callService('input_text', 'set_value',
+        { entity_id: `input_text.${tankId}_crash_confirmed_phase`, value: '' }).catch(() => {});
     }
+    crashConfirmed.delete(tankId);  // clear in-memory latch on advance
     pendingConfirm.delete(tankId); // consumed
   }
 }
@@ -412,8 +450,14 @@ function parsePlan(raw) {
     everyHours: Number.isFinite(ph.everyHours) ? ph.everyHours : undefined,
     hours: capHours(ph.hours, ph.kind),
     advance: capAdvance(ph.advance, ph.kind),
-    // ANY cold-crash phase is force-gated regardless of what the plan said — safety.
-    requiresConfirm: ph.kind === 'coldCrash' ? true : !!ph.requiresConfirm,
+    // Cold-crash confirm gate: HONOR the plan's explicit choice. Selecting a crash-only plan
+    // IS the decision to crash, so force-gating it made "Cold crash only" appear dead (silently
+    // waiting for a confirm press the user was never told about). Default: a coldCrash gates
+    // ONLY when requiresConfirm is absent (undefined) — a safety default for multi-phase plans
+    // where the crash arrives automatically. An EXPLICIT requiresConfirm:false runs immediately.
+    requiresConfirm: ph.kind === 'coldCrash'
+      ? (ph.requiresConfirm === undefined ? true : !!ph.requiresConfirm)
+      : !!ph.requiresConfirm,
   }));
   if (!phases.length) return null;
   const expectedAtten = Number.isFinite(p.expectedAtten) ? p.expectedAtten : null;
@@ -423,6 +467,10 @@ function parsePlan(raw) {
 // track crash-confirm presses + per-phase start setpoints + adopt-once guard between ticks
 const pendingConfirm = new Set();
 const phaseStartSetpoints = new Map();
+// crash-confirm latch: tankId -> confirmed phase index. Once set, a gated crash phase runs
+// without re-asking (the press-freshness window is only ~5min; a crash spans hours). Cleared
+// on phase advance so a LATER gated phase re-asks once.
+const crashConfirmed = new Map();
 const adopted = new Set(); // tanks whose in-progress ferment we've already adopted this run
 
 function nowIso() { return new Date().toISOString(); }

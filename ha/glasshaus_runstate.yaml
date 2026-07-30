@@ -67,3 +67,15 @@ input_text:
   tank_3_state_batchkey:
     <<: *batchkey
     name: Tank 3 State BatchKey
+  # which phase index has had its cold-crash confirmed — latches the confirm so a gated crash
+  # runs to completion without re-asking every 5min (the button-press freshness window). Cleared
+  # on phase advance. Runner also keeps an in-memory copy, so this helper is optional/for durability.
+  tank_1_crash_confirmed_phase: &crashconf
+    name: Tank 1 Crash Confirmed Phase
+    max: 6
+  tank_2_crash_confirmed_phase:
+    <<: *crashconf
+    name: Tank 2 Crash Confirmed Phase
+  tank_3_crash_confirmed_phase:
+    <<: *crashconf
+    name: Tank 3 Crash Confirmed Phase
