@@ -11,12 +11,13 @@
 //   input_button.tank_N_confirm_crash  the crash-confirm gate
 //   sensor.tank_N_program_status       (written by us: human status string + attrs)
 import { PRESETS } from './presets.mjs';
-import { tick, resolveStartPhase, _internals } from './statemachine.mjs';
+import { resolveStartPhase, _internals } from './statemachine.mjs';
 const { clampPhaseIndex } = _internals;
 import { computeDerived, updateStableClock } from './derived.mjs';
 import { writeAllTankMetrics, vmGravitySlopePts, vmLastGravity } from './metrics.mjs';
-import { smoothOffset, slewLimit, beerInBand } from './tiltcomp.mjs';
 import { computeHealth } from './monitor.mjs';
+import { decideCommand } from './decide.mjs';
+import { defaultState, hydrate, serialize, seedFromHelpers } from './tankstate.mjs';
 
 const HA_URL = req('HA_URL');
 const HA_TOKEN = req('HA_TOKEN');
@@ -113,7 +114,7 @@ async function tickTank(tankId, by) {
   // undefined phase and falsely reports "program complete" (the crash-only bug: a 1-phase
   // crash plan stuck at index 1 never ran, said complete after one step). Snap it back AND
   // persist the correction so it's durably fixed, not re-derived every tick.
-  const phaseIndex = clampPhaseIndex(rawPhaseIndex, program.phases.length);
+  let phaseIndex = clampPhaseIndex(rawPhaseIndex, program.phases.length);
   if (phaseIndex !== rawPhaseIndex && !DRY_RUN) {
     console.log(`[${tankId}] phase index ${rawPhaseIndex} out of range for ${program.phases.length}-phase plan → clamped to ${phaseIndex}`);
     await callService('input_number', 'set_value',
@@ -125,12 +126,14 @@ async function tickTank(tankId, by) {
   const phaseStartedIso = s(`input_datetime.${tankId}_program_phase_started`);
   // TIME_SCALE accelerates the phase clock for the live demo (see env def). At 1 it's
   // real elapsed hours; at 3600 one real second counts as one phase-hour.
-  const phaseElapsedHours = phaseStartedIso
+  let phaseElapsedHours = phaseStartedIso
     ? ((Date.now() - Date.parse(phaseStartedIso)) / 3.6e6) * TIME_SCALE : 0;
   const currentSetpointF = numOr(by[`number.${tankId}_setpoint_raw`]?.state) != null
     ? numOr(by[`number.${tankId}_setpoint_raw`].state) / 10 : null;
 
-  const confirmPressed = pendingConfirm.has(tankId);
+  // crash-confirm is now edge-detected inside decideCommand from the button's last_changed
+  // (via _buildControlInput → pressMs), compared against the durable lcp. The legacy
+  // pendingConfirm Set is no longer consulted for the gate.
   // PER-TANK control inputs published by deriveTank (which ran first this tick),
   // NOT the global Black sensors. deriveTank resolves each tank's OWN Tilt/batch, so
   // control keys off the right gravity/og/attenuation. If deriveTank hasn't published
@@ -155,28 +158,22 @@ async function tickTank(tankId, by) {
     }
   }
 
-  // CRASH-CONFIRM LATCH: once a gated crash phase is confirmed, remember WHICH phase index was
-  // confirmed. The button press only stays "fresh" ~5min but a crash runs for hours — without
-  // this latch the gate re-fired every 5min and forced re-confirmation. Latched in-memory
-  // (crashConfirmed Map, keyed tank->phaseIndex) AND mirrored to an optional HA helper for
-  // durability if it exists. In-memory alone is fine: a container restart mid-crash would
-  // re-ask once (safe), and phaseConfirmed also reads the helper when present.
-  const helperConfirmed = s(`input_text.${tankId}_crash_confirmed_phase`);
-  const memConfirmed = crashConfirmed.get(tankId);
-  const phaseConfirmed = String(memConfirmed) === String(phaseIndex)
-    || (helperConfirmed != null && helperConfirmed !== '' && String(helperConfirmed) === String(phaseIndex));
-  // if a fresh press just arrived for a gated phase, latch it (memory + optional HA helper)
-  if (confirmPressed && !phaseConfirmed) {
-    crashConfirmed.set(tankId, phaseIndex);
-    if (!DRY_RUN) await callService('input_text', 'set_value',
-      { entity_id: `input_text.${tankId}_crash_confirmed_phase`, value: String(phaseIndex) }).catch(() => {});
-    console.log(`[${tankId}] crash confirm LATCHED for phase ${phaseIndex} (won't re-ask)`);
+  // ── DURABLE CONTROL STATE ──────────────────────────────────────────────────
+  // Hydrate this tank's TankState (single source of truth for crash-confirm/adopt/offset)
+  // from the durable doc on first touch, seeding from the old scattered helpers if absent
+  // (first-boot migration). A batch change re-seeds so no old-batch latch leaks across.
+  const batchKey = String(s(`input_text.${tankId}_state_batchkey`) ?? 'none');
+  let tankState = tankStateCache.get(tankId);
+  if (!tankState || String(tankState.b) !== batchKey) {
+    tankState = _resolveInitialState(tankId, by, batchKey);
+    tankStateCache.set(tankId, tankState);
+    await persistTankState(tankId, tankState);   // best-effort; logs (does NOT swallow) on fail
   }
 
-  const state = {
-    phaseIndex, phaseElapsedHours, currentSetpointF,
+  // control inputs consumed by decideCommand (mirrors the old `state` sensor block + tilt readings)
+  const control = {
+    gravityStale: ci.gravityStale,
     phaseStartSetpointF: numOr(phaseStartSetpoints.get(psKey), currentSetpointF),
-    gravityStale: ci.gravityStale, confirmPressed, phaseConfirmed,
     gravity: ci.gravity ?? null,
     expectedFg: ci.expectedFg ?? null,
     og: ci.og ?? null,
@@ -186,14 +183,23 @@ async function tickTank(tankId, by) {
     // the assigned batch's strain expected attenuation (Brewfather yeast spec) —
     // drives the attenuationOfExpected advance type in Claude-generated plans.
     expectedAttenuationPct: expectedAttenuationFor(tankId, by),
+    // tilt-comp inputs (were read inline in the old tilt block)
+    tempSource: (s(`input_select.${tankId}_temp_source`) || 'Probe'),
+    probeTempF: numOr(s(`sensor.${tankId}_probe_temp`)),
+    beerTempF: ci.beerTempF ?? null,
+    beerTempAgeMin: ci.beerTempAgeMin ?? null,
   };
 
-  // ADOPT an in-progress ferment: on a FRESH start (phase 0, just set) jump to the
-  // phase the beer is actually in, so starting a program mid-fermentation doesn't
-  // wrongly begin at pitch. Runs once per start (guarded by adopted set).
-  if (phaseIndex === 0 && phaseElapsedHours < (TICK_MINUTES / 60) * 1.5 && !adopted.has(tankId)) {
-    adopted.add(tankId);
-    const startPhase = resolveStartPhase(program, state);
+  // ADOPT an in-progress ferment: on a FRESH start (phase 0, just set) jump to the phase the
+  // beer is actually in, so starting a program mid-fermentation doesn't wrongly begin at pitch.
+  // Guarded by the DURABLE `ad` flag (was an in-memory Set) so a restart mid-ferment does NOT
+  // re-adopt / re-jump. seedFromHelpers marks a live mid-ferment tank ad=true on the cutover.
+  if (phaseIndex === 0 && phaseElapsedHours < (TICK_MINUTES / 60) * 1.5 && !tankState.ad) {
+    const startPhase = resolveStartPhase(program, {
+      ...control, phaseIndex, phaseElapsedHours, currentSetpointF,
+    });
+    tankState.ad = true;
+    await persistTankState(tankId, tankState);
     if (startPhase > 0) {
       console.log(`[${tankId}] adopting in-progress ferment → start at phase ${startPhase} (${program.phases[startPhase].name})`);
       if (!DRY_RUN) {
@@ -202,12 +208,24 @@ async function tickTank(tankId, by) {
         await callService('input_datetime', 'set_datetime',
           { entity_id: `input_datetime.${tankId}_program_phase_started`, datetime: nowIso() });
       }
-      state.phaseIndex = startPhase;
-      state.phaseElapsedHours = 0;
+      // re-run this tick at the adopted phase on the next interval; for THIS tick, decide from it
+      phaseIndex = startPhase;
+      phaseElapsedHours = 0;
     }
   }
 
-  const r = tick(program, state);
+  // build press timestamp + cfg, then make the pure decision
+  const ctlInput = _buildControlInput(tankId, by, tankState, control);
+  const decision = decideCommand({
+    ...ctlInput, program, phaseIndex, phaseElapsedHours, currentSetpointF,
+  });
+  const r = {
+    setpointF: decision.commandF, advanceTo: decision.advanceTo,
+    awaitingConfirm: decision.awaitingConfirm, done: decision.done, note: decision.note,
+  };
+  const commandF = decision.commandF;   // decideCommand already applied tilt-comp
+  const tiltCtl = decision.tiltCtl;
+  const nextState = decision.nextState;
   const phase = program.phases[phaseIndex];
   const statusStr = r.done ? 'complete'
     : r.awaitingConfirm ? `awaiting crash confirm`
@@ -223,115 +241,11 @@ async function tickTank(tankId, by) {
 
   if (r.done) { console.log(`[${tankId}] program complete`); return; }
 
-  // ── TILT-COMPENSATED SETPOINT (fail-safe against Tilt loss) ────────────────
-  // The ITC-308 controls off ITS thermowell probe. On a shallow fill the probe reads
-  // off vs the actual beer (the Tilt, floating IN the liquid, is truer). In 'Tilt'
-  // mode we shift the commanded setpoint by (probe − tilt) so the 308 holds the BEER
-  // at target. E.g. want 68°F, probe 2°F below Tilt → command 70°F.
-  //
-  // THE FAILURE MODE THIS GUARDS: if the Tilt goes unresponsive/flaps (Black does),
-  // naively snapping back to the raw probe setpoint would OVERSHOOT the beer (the probe
-  // was reading cold) AND oscillate on every flap. So instead the offset is a slow,
-  // persisted value that RIDES THROUGH outages:
-  //   • Tilt fresh          → recompute offset, persist it (input_number.tank_N_temp_offset).
-  //   • Tilt lost < GRACE    → HOLD the last-good offset (flap-proof; beer barely drifts).
-  //   • Tilt lost > GRACE    → DECAY the held offset toward 0 over DECAY_H, and flag it,
-  //                            so control returns to the probe GRADUALLY, never a snap.
-  //   • never had an offset  → plain probe (no harm).
-  const OFFSET_CAP_F = 7;          // hard clamp on the applied offset. Raised 4→7: the real
-                                  // probe-vs-beer stratification gap measured ~5-6°F (Thermapen
-                                  // vs thermowell), so ±4 under-corrected. ±7 lets the live
-                                  // self-calibrating (probe−Tilt) offset fully apply while still
-                                  // bounding a bad reading from running cooling away.
-  const GRACE_MIN = 45;            // Tilt may vanish this long with NO change (flap-proof)
-  const DECAY_H = 4;               // after grace, unwind the held offset to 0 over this long
-  // SMOOTHING (anti-hunting): the probe is fast+noisy, the Tilt is slow+lagged, so the raw
-  // per-tick offset jitters and makes the ITC-308 chase itself. EMA-smooth the offset + slew-
-  // limit the setpoint. Both damping-only (can't run the beer away). Env-tunable.
-  const EMA_ALPHA = Math.min(1, Math.max(0.05, Number(process.env.TILT_EMA_ALPHA || 0.3)));  // small = smoother
-  const MAX_SLEW_F = Math.max(0.1, Number(process.env.TILT_MAX_SLEW_F || 0.5));              // °F/tick cap
-  // TARGET DEADBAND: when the beer is within ±BAND_F of target, FREEZE the offset (stop chasing)
-  // — this is what actually kills the ±2°F limit cycle. Wider band = calmer but looser hold.
-  const BAND_F = Math.max(0.2, Number(process.env.TILT_DEADBAND_F || 0.6));
-  // FAR-OFF threshold: beyond ±FAR_OFF_F from target, correct at FULL strength (raw offset, no
-  // EMA/slew throttle) so a real error (beer stuck 2°F cold) recovers fast instead of crawling.
-  const FAR_OFF_F = Math.max(BAND_F + 0.3, Number(process.env.TILT_FAR_OFF_F || 1.5));
-  let commandF = r.setpointF;
-  let tiltCtl = 'probe';           // for the status entity: probe | tilt | held | decaying
-  const tempSource = (s(`input_select.${tankId}_temp_source`) || 'Probe');
-  if (commandF != null && /tilt/i.test(tempSource)) {
-    const probeF = numOr(s(`sensor.${tankId}_probe_temp`));
-    const tiltF = ci.beerTempF ?? null;
-    const tiltAgeMin = ci.beerTempAgeMin ?? null;
-    const tiltFresh = tiltF != null && (tiltAgeMin == null || tiltAgeMin <= 30);
-    const prevOffset = numOr(s(`input_number.${tankId}_temp_offset`));  // persisted last-good
-    const clamp = (o) => Math.max(-OFFSET_CAP_F, Math.min(OFFSET_CAP_F, o));
-
-    let offset = null;
-    let farOff = false;   // beer is meaningfully off target → correct FAST (no damping throttle)
-    if (probeF != null && tiltF != null && tiltFresh) {
-      // ASYMMETRIC control by how far the beer is from target — damping must NOT throttle a real
-      // recovery (the bug: beer stuck at 64 wanting 66 while EMA+slew let the setpoint only crawl
-      // up 0.2°/tick). Three regimes:
-      //   • IN-BAND (|beer−target| ≤ BAND_F):   FREEZE offset — kills the lagged-feedback swing.
-      //   • NEAR    (BAND_F < err ≤ FAR_OFF_F): EMA-smooth + slew — gentle, damped correction.
-      //   • FAR     (err > FAR_OFF_F):          use RAW offset, NO slew cap — get the beer back now.
-      const targetF = r.setpointF;                       // the program's intended BEER temp
-      const err = Math.abs(tiltF - targetF);
-      const raw = clamp(probeF - tiltF);
-      if (beerInBand(tiltF, targetF, BAND_F) && prevOffset != null) {
-        offset = clamp(prevOffset);                      // hold — do NOT chase
-        tiltCtl = 'tilt';
-        console.log(`[${tankId}] beer ${tiltF} within ±${BAND_F} of target ${targetF} — HOLDING offset ${offset.toFixed(2)} (no chase)`);
-      } else if (err > FAR_OFF_F || prevOffset == null) {
-        // FAR from target → apply the full raw offset immediately; don't EMA-throttle a real error.
-        offset = raw;
-        farOff = true;
-        tiltCtl = 'tilt';
-        console.log(`[${tankId}] beer ${tiltF} FAR off target ${targetF} (err ${err.toFixed(1)}>${FAR_OFF_F}) — FULL correct: offset=${offset.toFixed(2)} (no EMA/slew)`);
-      } else {
-        // NEAR (just outside band) → gentle EMA-smoothed correction + slew (below).
-        offset = clamp(smoothOffset(raw, prevOffset, EMA_ALPHA));
-        tiltCtl = 'tilt';
-        console.log(`[${tankId}] beer ${tiltF} near-target ${targetF} (err ${err.toFixed(1)}) — gentle correct: raw=${raw.toFixed(1)} ema=${offset.toFixed(2)}`);
-      }
-      // persist the offset (survives restarts + Tilt gaps). Only write past the deadband so we
-      // don't bump the helper every tick for sub-0.1° drift.
-      if (!DRY_RUN && (prevOffset == null || Math.abs(offset - prevOffset) >= 0.1)) {
-        await callService('input_number', 'set_value',
-          { entity_id: `input_number.${tankId}_temp_offset`, value: Math.round(offset * 10) / 10 });
-      }
-    } else if (prevOffset != null) {
-      // Tilt not usable → decide HOLD vs DECAY based on how long it's been gone.
-      const gapMin = tiltAgeMin ?? 9999;
-      if (gapMin <= GRACE_MIN) {
-        offset = clamp(prevOffset); tiltCtl = 'held';
-        console.warn(`[${tankId}] Tilt stale ${Math.round(gapMin)}m (<${GRACE_MIN}m grace) — HOLDING offset ${offset.toFixed(1)}°F`);
-      } else {
-        // linear decay of the held offset toward 0 over DECAY_H past the grace window
-        const past = (gapMin - GRACE_MIN) / 60;            // hours past grace
-        const f = Math.max(0, 1 - past / DECAY_H);
-        offset = clamp(prevOffset * f); tiltCtl = 'decaying';
-        console.warn(`[${tankId}] ⚠ Tilt lost ${Math.round(gapMin)}m — DECAYING offset ${prevOffset.toFixed(1)}→${offset.toFixed(1)}°F (reverting to probe over ${DECAY_H}h)`);
-        if (Math.abs(offset) < 0.1 && !DRY_RUN) {
-          await callService('input_number', 'set_value', { entity_id: `input_number.${tankId}_temp_offset`, value: 0 });
-        }
-      }
-    } else {
-      console.log(`[${tankId}] temp_source=Tilt but no Tilt + no saved offset → plain probe ${r.setpointF}°F`);
-    }
-
-    if (offset != null && Math.abs(offset) >= 0.05) {
-      const compensated = r.setpointF + offset;
-      const clamped = program.clamp
-        ? Math.max(program.clamp.minF, Math.min(program.clamp.maxF, compensated)) : compensated;
-      // SLEW-LIMIT the commanded setpoint (NEAR-target only): the beer can't track a big instant
-      // jump, so cap per-tick change to MAX_SLEW_F — ramps gently, no compressor slam/overshoot.
-      // BUT when the beer is FAR off target, DON'T slew-throttle the recovery — command the full
-      // correction now (the bug this fixes: beer stuck 2°F cold while the setpoint only crawled up).
-      commandF = farOff ? clamped : slewLimit(clamped, currentSetpointF, MAX_SLEW_F);
-      console.log(`[${tankId}] tilt-ctl(${tiltCtl}): probe=${probeF} tilt=${tiltF} off=${offset.toFixed(2)} → target ${r.setpointF}→ want ${clamped.toFixed(1)} → cmd ${commandF.toFixed(1)}°F${farOff ? ' [FAR — full]' : ` (slew ${MAX_SLEW_F}/tick)`}`);
-    }
+  // TILT-COMPENSATED SETPOINT is now computed purely inside decideCommand (three regimes +
+  // held/decaying on Tilt loss); `commandF`/`tiltCtl` above are its result. The runner just
+  // performs the I/O: surface the mode, write the setpoint, advance, persist state.
+  if (tiltCtl === 'tilt' || tiltCtl === 'held' || tiltCtl === 'decaying') {
+    console.log(`[${tankId}] tilt-ctl(${tiltCtl}): off=${(nextState.off ?? 0).toFixed?.(2) ?? nextState.off} → target ${r.setpointF}°F → cmd ${commandF?.toFixed?.(1) ?? commandF}°F`);
   }
 
   // surface the tilt-control MODE so the app + health notify can show/warn on it. 'held'
@@ -364,18 +278,59 @@ async function tickTank(tankId, by) {
     // Anchor the NEXT phase on where we ended this one (its ramp/crash steps from here).
     // Keyed by (tank, next-index); the fresh-phase block above will find it already set.
     phaseStartSetpoints.set(`${tankId}:${r.advanceTo}`, r.setpointF ?? currentSetpointF);
+    // clear the crash-confirm latch on phase change so a LATER gated phase re-asks once
+    // (the latch is keyed to the specific phase index we just left). Durable: reset cc in
+    // the state doc; decideCommand's `alreadyLatched` (cc===phaseIndex) then re-gates.
+    nextState.cc = -1;
     if (!DRY_RUN) {
       await callService('input_number', 'set_value',
         { entity_id: `input_number.${tankId}_program_phase`, value: r.advanceTo });
       await callService('input_datetime', 'set_datetime',
         { entity_id: `input_datetime.${tankId}_program_phase_started`, datetime: nowIso() });
-      // clear the crash-confirm latch on phase change so a LATER gated phase re-asks once
-      // (the latch is keyed to the specific phase index we just left).
+      // keep the legacy helper mirror in sync (glasshaus_health / older readers may read it)
       await callService('input_text', 'set_value',
         { entity_id: `input_text.${tankId}_crash_confirmed_phase`, value: '' }).catch(() => {});
     }
-    crashConfirmed.delete(tankId);  // clear in-memory latch on advance
+    crashConfirmed.delete(tankId);  // legacy in-memory latch (retired) — keep clean
     pendingConfirm.delete(tankId); // consumed
+  }
+
+  // PERSIST the decided next state (crash-confirm latch, adopt flag, tilt offset, etc.) to the
+  // durable doc + cache — ONLY when it changed. On serialize→null or write failure, log loudly
+  // (do NOT swallow): a persistent failure means a restart loses state and the operator must know.
+  if (JSON.stringify(nextState) !== JSON.stringify(tankState)) {
+    nextState.u = Date.now();
+    tankStateCache.set(tankId, nextState);
+    await persistTankState(tankId, nextState);
+    // keep the legacy crash-confirm helper mirror aligned when the latch changed
+    if (nextState.cc !== tankState.cc && !DRY_RUN) {
+      await callService('input_text', 'set_value',
+        { entity_id: `input_text.${tankId}_crash_confirmed_phase`,
+          value: nextState.cc >= 0 ? String(nextState.cc) : '' }).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Persist a TankState to input_text.tank_N_control_state. Serialize-guarded (drops `off`, then
+ * skips on still-over) and, per spec, does NOT silently swallow write failure — logs loudly so
+ * a persistent failure (e.g. helper not yet registered in HA) is visible. Best-effort: the
+ * in-memory cache still holds truth for this process even if the write fails.
+ */
+async function persistTankState(tankId, state) {
+  const json = serialize(state);
+  if (json == null) {
+    console.error(`[${tankId}] control-state serialize > 255 even after dropping off — NOT writing (keeping last-good)`);
+    return false;
+  }
+  if (DRY_RUN) { console.log(`[${tankId}] control-state (DRY_RUN, not written): ${json}`); return true; }
+  try {
+    await callService('input_text', 'set_value',
+      { entity_id: `input_text.${tankId}_control_state`, value: json });
+    return true;
+  } catch (e) {
+    console.error(`[${tankId}] control-state write FAILED (helper registered? reload glasshaus_runstate.yaml): ${e.message}`);
+    return false;
   }
 }
 
@@ -472,6 +427,69 @@ const phaseStartSetpoints = new Map();
 // on phase advance so a LATER gated phase re-asks once.
 const crashConfirmed = new Map();
 const adopted = new Set(); // tanks whose in-progress ferment we've already adopted this run
+
+// DURABLE per-tank control-state cache (tankId -> TankState). Hydrated from
+// input_text.tank_N_control_state on first touch (seed-from-helpers if absent), and the
+// single source of truth for crash-confirm/adopt/offset/stability from then on. In-memory
+// Maps above (crashConfirmed/adopted) are legacy fallbacks being retired by this cache.
+const tankStateCache = new Map();
+
+/**
+ * PURE (I/O-free) assembly of decideCommand's input from raw HA states.
+ * @param tankId e.g. 'tank_2'
+ * @param by     the raw HA states map (entity_id -> {state,last_changed,...})
+ * @param tankState the hydrated TankState for this tank
+ * @param control the resolved control inputs (gravity/temps/tilt freshness) for this tank
+ * @returns { program?, phaseIndex?, phaseElapsedHours?, currentSetpointF?, tankState, pressMs, cfg, control }
+ */
+export function _buildControlInput(tankId, by, tankState, control) {
+  const changed = by[`input_button.${tankId}_confirm_crash`]?.last_changed;
+  const pressMs = changed ? Date.parse(changed) : null;
+  return {
+    tankState,
+    pressMs: Number.isFinite(pressMs) ? pressMs : null,
+    cfg: tiltCfg(),
+    control,
+  };
+}
+
+/**
+ * PURE resolution of a tank's initial TankState: hydrate the durable doc if present and
+ * for the current batch; otherwise seed from the existing scattered helpers (first-boot
+ * migration) so a live mid-ferment tank carries real state across the cutover.
+ * @param tankId e.g. 'tank_2'
+ * @param by     raw HA states map
+ * @param batchKey the current batch identity for this tank
+ * @returns TankState
+ */
+export function _resolveInitialState(tankId, by, batchKey) {
+  const raw = by[`input_text.${tankId}_control_state`]?.state;
+  const doc = hydrate(raw);
+  if (doc && String(doc.b) === String(batchKey)) return doc;
+  const st = (id) => by[id]?.state;
+  const parseMs = (v) => { const t = v ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : null; };
+  return seedFromHelpers({
+    batchKey,
+    phaseIndex: numOr(st(`input_number.${tankId}_program_phase`)),
+    stableSinceMs: parseMs(st(`input_datetime.${tankId}_stable_since`)),
+    fermStarted: st(`input_boolean.${tankId}_fermentation_started`) === 'on',
+    crashConfirmedPhase: numOr(st(`input_text.${tankId}_crash_confirmed_phase`)),
+    tempOffset: numOr(st(`input_number.${tankId}_temp_offset`)),
+  });
+}
+
+/** Tilt-comp tunables (env-driven), packaged for decideCommand's pure input.cfg. */
+function tiltCfg() {
+  return {
+    EMA_ALPHA: Math.min(1, Math.max(0.05, Number(process.env.TILT_EMA_ALPHA || 0.3))),
+    MAX_SLEW_F: Math.max(0.1, Number(process.env.TILT_MAX_SLEW_F || 0.5)),
+    BAND_F: Math.max(0.2, Number(process.env.TILT_DEADBAND_F || 0.6)),
+    FAR_OFF_F: Math.max(0.5, Number(process.env.TILT_FAR_OFF_F || 1.5)),
+    OFFSET_CAP_F: 7,
+    GRACE_MIN: 45,
+    DECAY_H: 4,
+  };
+}
 
 function nowIso() { return new Date().toISOString(); }
 /** epoch ms → "YYYY-MM-DD HH:MM:SS" in the container's local TZ, for HA
@@ -912,6 +930,14 @@ async function writeHealth(by) {
   });
 }
 
-console.log(`[programs] runner up. tick every ${TICK_MINUTES}min. DRY_RUN=${DRY_RUN}. TIME_SCALE=${TIME_SCALE}x. tanks=${TANKS}`);
-tickAll();
-setInterval(tickAll, TICK_MINUTES * 60_000);
+// ENTRYPOINT GUARD: only launch the tick loop when run directly (node runner.mjs).
+// When imported (e.g. runner.test.mjs), do NOT fire tickAll()/setInterval — that would
+// make real HA calls and keep the process alive. import.meta.main is true only when this
+// file is the process entry (Node 20.19+/22+/24). Fallback to argv for older runtimes.
+const isMain = import.meta.main
+  ?? (typeof process !== 'undefined' && /runner\.mjs$/.test(process.argv[1] || ''));
+if (isMain) {
+  console.log(`[programs] runner up. tick every ${TICK_MINUTES}min. DRY_RUN=${DRY_RUN}. TIME_SCALE=${TIME_SCALE}x. tanks=${TANKS}`);
+  tickAll();
+  setInterval(tickAll, TICK_MINUTES * 60_000);
+}
