@@ -6,6 +6,6 @@
   "description": "GlassHaus fermentation-programs runner — tick state machine, drive setpoints via HA",
   "scripts": {
     "start": "node runner.mjs",
-    "test": "node statemachine.test.mjs"
+    "test": "node --test"
   }
 }
