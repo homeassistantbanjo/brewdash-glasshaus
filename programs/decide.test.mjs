@@ -44,3 +44,34 @@ test('stale-but-newer press still latches (no wall-clock window)', () => {
   assert.equal(d.awaitingConfirm, false);
   assert.equal(d.nextState.lcp, 1);
 });
+
+// ── Task 4: tilt-comp regimes ────────────────────────────────────────────────
+import { defaultState as ds } from './tankstate.mjs';
+const cfg = { EMA_ALPHA:0.3, MAX_SLEW_F:0.5, BAND_F:0.6, FAR_OFF_F:1.5, OFFSET_CAP_F:7, GRACE_MIN:45, DECAY_H:4 };
+const holdPlan = { clamp:{minF:32,maxF:75}, phases:[{ name:'Hold', kind:'hold', tempF:66 }] };
+const tiltInput = (over={}) => ({
+  program: holdPlan, phaseIndex:0, phaseElapsedHours:0, currentSetpointF:66,
+  tankState: ds('148'), pressMs:null, cfg,
+  control: { gravityStale:false, phaseStartSetpointF:66, tempSource:'Tilt',
+    beerTempF:64, beerTempAgeMin:1, probeTempF:67.5 }, ...over,
+});
+
+test('far off target → full raw offset, no slew throttle', () => {
+  // beer 64, target 66 → err 2 > FAR_OFF 1.5 → offset = probe-tilt = 3.5, command ~69.5
+  const d = decideCommand(tiltInput());
+  assert.equal(d.tiltCtl, 'tilt');
+  assert.ok(d.commandF >= 69 && d.commandF <= 70);
+  assert.ok(Math.abs(d.nextState.off - 3.5) < 0.01);
+});
+
+test('in-band → freeze offset (no chase)', () => {
+  const st = ds('148'); st.off = 3;
+  const d = decideCommand(tiltInput({ control: { gravityStale:false, phaseStartSetpointF:66, tempSource:'Tilt', beerTempF:66.2, beerTempAgeMin:1, probeTempF:69 }, tankState: st }));
+  assert.equal(d.nextState.off, 3);   // held, unchanged
+});
+
+test('probe mode → no tilt-comp, command = plan setpoint', () => {
+  const d = decideCommand(tiltInput({ control: { gravityStale:false, phaseStartSetpointF:66, tempSource:'Probe' } }));
+  assert.equal(d.tiltCtl, 'probe');
+  assert.equal(d.commandF, 66);
+});
