@@ -3,7 +3,7 @@
 // Short keys for headroom; see docs/superpowers/specs/2026-07-30-control-state-refactor-design.md
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultState, serialize, hydrate } from './tankstate.mjs';
+import { defaultState, serialize, hydrate, seedFromHelpers } from './tankstate.mjs';
 
 test('defaultState has all short keys + cc=-1 none', () => {
   const s = defaultState('148');
@@ -39,4 +39,25 @@ test('hydrate null/garbage → null', () => {
   assert.equal(hydrate(null), null);
   assert.equal(hydrate('unknown'), null);
   assert.equal(hydrate('{not json'), null);
+});
+
+test('seedFromHelpers carries live state across cutover', () => {
+  const s = seedFromHelpers({
+    batchKey: '148', phaseIndex: 0, stableSinceMs: 1784476204000,
+    fermStarted: true, crashConfirmedPhase: 0, tempOffset: 4.3,
+  });
+  assert.equal(s.b, '148');
+  assert.equal(s.fl, true);
+  assert.equal(s.cc, 0);
+  assert.equal(s.off, 4.3);
+  assert.equal(s.ss, 1784476204000);
+  assert.equal(s.ad, true);   // a tank already mid-ferment is treated as adopted (no re-jump)
+});
+
+test('seedFromHelpers with empty helpers → safe defaults', () => {
+  const s = seedFromHelpers({ batchKey: 'none' });
+  assert.equal(s.b, 'none');
+  assert.equal(s.cc, -1);
+  assert.equal(s.fl, false);
+  assert.equal(s.ad, false);
 });

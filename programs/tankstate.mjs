@@ -32,3 +32,20 @@ export function hydrate(raw) {
     return d;
   } catch { return null; }
 }
+
+// First-boot migration: build an initial State from the existing scattered HA
+// helpers so a live mid-ferment tank carries real state across the cutover
+// (no re-adopt / phase re-jump, no re-ask crash-confirm, no lost stability clock).
+export function seedFromHelpers(h) {
+  const s = defaultState(h?.batchKey ?? 'none');
+  if (h == null) return s;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : (Number.isFinite(Number(v)) ? Number(v) : null));
+  s.ss = num(h.stableSinceMs);
+  s.fl = h.fermStarted === true;
+  s.cc = num(h.crashConfirmedPhase) != null ? num(h.crashConfirmedPhase) : -1;
+  s.off = num(h.tempOffset);
+  // a tank that already has fermentation-started or a running batch is mid-ferment:
+  // treat as adopted so the runner does not re-run resolveStartPhase and jump phases.
+  s.ad = s.fl === true || num(h.phaseIndex) > 0;
+  return s;
+}
