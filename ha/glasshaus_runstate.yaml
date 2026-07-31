@@ -79,3 +79,16 @@ input_text:
   tank_3_crash_confirmed_phase:
     <<: *crashconf
     name: Tank 3 Crash Confirmed Phase
+
+  # Durable per-tank control state (JSON, short keys). Single source of truth for
+  # phase anchor, crash-confirm, adopt flag, stability clock, tilt offset,
+  # last-consumed confirm press. Runner hydrates on boot, persists on change.
+  tank_1_control_state: &ctlstate
+    name: Tank 1 Control State
+    max: 255
+  tank_2_control_state:
+    <<: *ctlstate
+    name: Tank 2 Control State
+  tank_3_control_state:
+    <<: *ctlstate
+    name: Tank 3 Control State
