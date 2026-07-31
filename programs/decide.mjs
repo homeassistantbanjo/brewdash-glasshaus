@@ -84,6 +84,7 @@ export function decideCommand(input) {
     tiltCtl,
     advanceTo: r.advanceTo ?? null,
     awaitingConfirm: !!r.awaitingConfirm,
+    paused: !!r.paused,
     done: !!r.done,
     note: r.note,
     nextState: next,

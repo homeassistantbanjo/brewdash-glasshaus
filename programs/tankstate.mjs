@@ -39,7 +39,15 @@ export function hydrate(raw) {
 export function seedFromHelpers(h) {
   const s = defaultState(h?.batchKey ?? 'none');
   if (h == null) return s;
-  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : (Number.isFinite(Number(v)) ? Number(v) : null));
+  // null/undefined/'' → null (NOT 0). Number(null)===0 and Number('')===0 would otherwise
+  // coerce a MISSING helper into 0 — e.g. a missing crash_confirmed_phase seeding cc=0 would
+  // wrongly auto-confirm a phase-0 cold crash on the live cutover. Guard those explicitly.
+  const num = (v) => {
+    if (v == null || v === '') return null;
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
   s.ss = num(h.stableSinceMs);
   s.fl = h.fermStarted === true;
   s.cc = num(h.crashConfirmedPhase) != null ? num(h.crashConfirmedPhase) : -1;

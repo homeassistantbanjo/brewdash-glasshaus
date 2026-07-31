@@ -61,3 +61,13 @@ test('seedFromHelpers with empty helpers → safe defaults', () => {
   assert.equal(s.fl, false);
   assert.equal(s.ad, false);
 });
+
+test('seedFromHelpers: null/empty numeric helpers do NOT coerce to 0 (no phantom crash-confirm)', () => {
+  // Number(null)===0 and Number('')===0 — a MISSING crash_confirmed_phase must seed cc=-1,
+  // never cc=0 (which would auto-confirm a phase-0 cold crash on the live cutover). Same for
+  // stableSince/tempOffset: absent → null, not 0.
+  const s = seedFromHelpers({ batchKey: '148', crashConfirmedPhase: null, stableSinceMs: null, tempOffset: '' });
+  assert.equal(s.cc, -1);
+  assert.equal(s.ss, null);
+  assert.equal(s.off, null);
+});

@@ -75,3 +75,17 @@ test('probe mode → no tilt-comp, command = plan setpoint', () => {
   assert.equal(d.tiltCtl, 'probe');
   assert.equal(d.commandF, 66);
 });
+
+test('paused (gravity stale, data-driven advance gated) is forwarded to the decision', () => {
+  // tick() returns paused:true when gravity is stale and the phase has a data-driven advance —
+  // the "holding, not advancing" safety state. decideCommand MUST forward it so the status entity
+  // and health automation can distinguish "actively controlling" from "holding on untrusted data".
+  const dataDrivenPlan = { clamp:{minF:32,maxF:75}, phases:[{ name:'Primary', kind:'hold', tempF:66, advance:{ type:'attenuation', pct:75 } }] };
+  const d = decideCommand({
+    program: dataDrivenPlan, phaseIndex:0, phaseElapsedHours:0, currentSetpointF:66,
+    tankState: defaultState('148'), pressMs:null,
+    control: { gravityStale:true, phaseStartSetpointF:66, tempSource:'Probe' },
+  });
+  assert.equal(d.paused, true);
+  assert.match(d.note, /stale/);
+});

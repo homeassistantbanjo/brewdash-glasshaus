@@ -72,7 +72,15 @@ async function bfFacts(batchKey) {
     return hit?.facts ?? null;   // fall back to a stale value if we have one
   }
 }
-const numOr = (v, d = null) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+// null/undefined/'' → default (NOT 0). HA input_text/input_number helpers default to state ''
+// when never written, and Number('')===0 / Number(null)===0 are finite — so a naive Number()
+// coercion turns a MISSING helper into 0. That silently seeded crashConfirmedPhase=0 (→ a phantom
+// phase-0 crash-confirm) and tempOffset=0 on the cutover. Reject empties before coercing.
+const numOr = (v, d = null) => {
+  if (v == null || v === '') return d;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+};
 const usable = (s) => s != null && s !== 'unknown' && s !== 'unavailable' && s !== '';
 
 async function callService(domain, service, data) {
@@ -221,7 +229,8 @@ async function tickTank(tankId, by) {
   });
   const r = {
     setpointF: decision.commandF, advanceTo: decision.advanceTo,
-    awaitingConfirm: decision.awaitingConfirm, done: decision.done, note: decision.note,
+    awaitingConfirm: decision.awaitingConfirm, paused: decision.paused,
+    done: decision.done, note: decision.note,
   };
   const commandF = decision.commandF;   // decideCommand already applied tilt-comp
   const tiltCtl = decision.tiltCtl;
@@ -468,7 +477,7 @@ export function _resolveInitialState(tankId, by, batchKey) {
   if (doc && String(doc.b) === String(batchKey)) return doc;
   const st = (id) => by[id]?.state;
   const parseMs = (v) => { const t = v ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : null; };
-  return seedFromHelpers({
+  const seeded = seedFromHelpers({
     batchKey,
     phaseIndex: numOr(st(`input_number.${tankId}_program_phase`)),
     stableSinceMs: parseMs(st(`input_datetime.${tankId}_stable_since`)),
@@ -476,6 +485,13 @@ export function _resolveInitialState(tankId, by, batchKey) {
     crashConfirmedPhase: numOr(st(`input_text.${tankId}_crash_confirmed_phase`)),
     tempOffset: numOr(st(`input_number.${tankId}_temp_offset`)),
   });
+  // SEED lcp from the confirm-button's last_changed so a PRE-EXISTING press (from a prior
+  // crash) is treated as already-consumed. Otherwise decideCommand's freshPress (pressMs>lcp,
+  // lcp seeded null→0) would read an old button timestamp as a fresh press and auto-confirm a
+  // gated phase on the first tick after cutover — a phantom confirm on live tanks.
+  const pressChanged = by[`input_button.${tankId}_confirm_crash`]?.last_changed;
+  seeded.lcp = parseMs(pressChanged);
+  return seeded;
 }
 
 /** Tilt-comp tunables (env-driven), packaged for decideCommand's pure input.cfg. */
