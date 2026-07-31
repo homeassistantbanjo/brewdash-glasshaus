@@ -196,6 +196,13 @@ export function tick(program, state) {
     advanceTo = state.phaseIndex + 1;
   }
 
+  // TERMINAL phase: never advance PAST the last phase. A crash (or any final phase) whose advance
+  // condition fires has nowhere to go — it must HOLD at target, not step to an out-of-range index.
+  // Advancing off the end made clampPhaseIndex bounce back to the last phase, and (for a gated
+  // crash) reset the confirm latch → "awaiting crash confirm" re-appeared every cycle. A terminal
+  // crash runs until the program is stopped; it is not "complete" on confirm.
+  if (advanceTo != null && advanceTo >= program.phases.length) advanceTo = null;
+
   return { setpointF, advanceTo, note: `${phase.name}: target ${setpointF}°F` };
 }
 

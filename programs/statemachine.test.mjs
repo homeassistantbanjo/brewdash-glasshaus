@@ -155,5 +155,31 @@ ok('clampPhaseIndex: empty plan → 0', _internals.clampPhaseIndex(2, 0)===0);
   ok('fresh press starts the crash', r3.awaitingConfirm !== true && r3.setpointF < 64);
 }
 
+// --- BUG 4 (found in live verification): a TERMINAL phase whose advance condition fires must
+//     HOLD at target, not advance past the end of the plan. A single cold-crash phase with
+//     advance:{type:'confirm'} was advancing to index 1 on confirm → clampPhaseIndex snapped it
+//     back to 0 → the runner reset the crash-confirm latch → "awaiting crash confirm" re-appeared
+//     every cycle (the original "asks for confirmation constantly" symptom). The crash held the
+//     beer at 36°F correctly throughout, but the confirm nag never stopped. ---
+{
+  const crashConfirmAdvance = { clamp:{minF:32,maxF:75}, phases:[
+    { name:'Cold Crash', kind:'coldCrash', targetF:36, stepF:3, everyHours:1, requiresConfirm:true, advance:{ type:'confirm' } },
+  ]};
+  const base = { phaseIndex:0, phaseElapsedHours:0, currentSetpointF:66, phaseStartSetpointF:66 };
+  const r = tick(crashConfirmAdvance, { ...base, confirmPressed:true });
+  ok('confirmed terminal crash HOLDS (does not advance past end)', r.advanceTo == null);
+  ok('confirmed terminal crash still commands the crash setpoint', r.setpointF != null && r.setpointF < 66);
+  ok('confirmed terminal crash is not falsely "done"', r.done !== true);
+}
+{
+  // a non-terminal phase whose advance fires MUST still advance (regression guard for the fix)
+  const twoPhase = { clamp:{minF:32,maxF:75}, phases:[
+    { name:'Primary', kind:'hold', tempF:66, advance:{ type:'confirm' } },
+    { name:'Cold Crash', kind:'coldCrash', targetF:36, stepF:3, everyHours:1 },
+  ]};
+  const r = tick(twoPhase, { phaseIndex:0, phaseElapsedHours:0, currentSetpointF:66, phaseStartSetpointF:66, confirmPressed:true });
+  ok('non-terminal confirmed phase STILL advances', r.advanceTo === 1);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
